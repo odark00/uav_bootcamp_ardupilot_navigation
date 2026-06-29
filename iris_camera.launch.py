@@ -96,28 +96,16 @@ def launch_state_pub_with_bridge(context):
     pkg_project_bringup = get_package_share_directory("ardupilot_gz_bringup")
     
     sdf_file = os.path.join(
-        pkg_ardupilot_gz_description, "models", "iris_with_lidar", "model.sdf"
+        pkg_ardupilot_gz_description, "models", "iris_with_camera", "model.sdf"
     )
 
     with open(sdf_file, "r") as infp:
         robot_desc = infp.read()
         # print(robot_desc)
 
-    ros_gz_bridge_config = "iris_3Dlidar_bridge.yaml"
+    ros_gz_bridge_config = "iris_bridge.yaml"
 
-    # Load SDF file and choose ros_gz bridge config based on lidar dimensions
-    if lidar_dim == "2":
-        log = LogInfo(msg="Using iris_with_2d_lidar_model ")
-        robot_desc = robot_desc.replace("<uri>model://lidar_2d</uri>", "<uri>model://lidar_2d</uri>")
-        ros_gz_bridge_config = "iris_2Dlidar_bridge.yaml"
-    elif lidar_dim == "3":
-        log = LogInfo(msg="Using iris_with_3d_lidar_model")
-        robot_desc = robot_desc.replace("<uri>model://lidar_2d</uri>", "<uri>model://lidar_3d</uri>")
-        ros_gz_bridge_config = "iris_3Dlidar_bridge.yaml"
-    else:
-        log = LogInfo(msg="ERROR: unknown lidar dimensions! Defaulting to 3d lidar")
-        robot_desc = robot_desc.replace("<uri>model://lidar_2d</uri>", "<uri>model://lidar_3d</uri>")
-        ros_gz_bridge_config = "iris_3Dlidar_bridge.yaml"
+    log = LogInfo(msg="Using iris_with_camera_model ")
 
 
     # Publish /tf and /tf_static.
