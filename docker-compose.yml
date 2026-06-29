@@ -1,0 +1,18 @@
+services:
+  ardupilot-sitl:
+    build: .
+    image: ardupilot-sitl-mavproxy:latest
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix
+    command: >
+      bash -c "
+        source install/setup.bash &&
+        sleep 10 &&
+        ros2 launch ardupilot_gz_bringup copter.launch.py &
+        sleep 100 && python control_drone_gazebo.py
+      "
+    environment:
+      - DISPLAY=${DISPLAY}
+    network_mode: host
+    stdin_open: true
+    tty: true
