@@ -9,7 +9,7 @@
     <include merge="true">
       <uri>package://ardupilot_gazebo/models/gimbal_small_2d</uri>
       <name>gimbal</name>
-      <pose degrees="true">0 -0.01 -0.124923 120 0 90</pose>    
+      <pose degrees="true">0 -0.01 -0.124923 180 0 90</pose>    
     </include>
 
     <joint name="gimbal_joint" type="revolute">
