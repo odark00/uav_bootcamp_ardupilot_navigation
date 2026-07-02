@@ -1,6 +1,5 @@
 import argparse
 import math
-import re
 import sys
 from abc import ABC, abstractmethod
 from collections import deque
@@ -9,6 +8,19 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+
+try:
+	from optical_flow.video_providers.base_video_provider import VideoProvider
+	from optical_flow.video_providers.bmp_folder_video_provider import BmpFolderVideoProvider
+	from optical_flow.video_providers.camera_video_provider import OpenCvCameraVideoProvider
+	from optical_flow.video_providers.looping_bmp_folder_video_provider import LoopingBmpFolderVideoProvider
+	from optical_flow.video_providers.video_file_provider import OpenCvVideoProvider
+except ModuleNotFoundError:
+	from video_providers.base_video_provider import VideoProvider
+	from video_providers.bmp_folder_video_provider import BmpFolderVideoProvider
+	from video_providers.camera_video_provider import OpenCvCameraVideoProvider
+	from video_providers.looping_bmp_folder_video_provider import LoopingBmpFolderVideoProvider
+	from video_providers.video_file_provider import OpenCvVideoProvider
 
 
 @dataclass
@@ -37,28 +49,6 @@ class MavlinkOpticalFlow:
 class MotionEstimator(ABC):
 	@abstractmethod
 	def process(self, gray_frame: np.ndarray) -> MotionEstimate:
-		raise NotImplementedError
-
-
-class VideoProvider(ABC):
-	@abstractmethod
-	def is_opened(self) -> bool:
-		raise NotImplementedError
-
-	@abstractmethod
-	def frame_width(self) -> int:
-		raise NotImplementedError
-
-	@abstractmethod
-	def fps(self) -> float:
-		raise NotImplementedError
-
-	@abstractmethod
-	def read(self) -> tuple[bool, np.ndarray | None]:
-		raise NotImplementedError
-
-	@abstractmethod
-	def release(self) -> None:
 		raise NotImplementedError
 
 
@@ -336,74 +326,27 @@ class VideoMotionDisplay:
 			self.is_open = False
 
 
-class OpenCvVideoProvider(VideoProvider):
-	def __init__(self, video_path: str) -> None:
-		self._capture = cv2.VideoCapture(video_path)
-
-	def is_opened(self) -> bool:
-		return bool(self._capture.isOpened())
-
-	def frame_width(self) -> int:
-		return int(self._capture.get(cv2.CAP_PROP_FRAME_WIDTH))
-
-	def fps(self) -> float:
-		return float(self._capture.get(cv2.CAP_PROP_FPS))
-
-	def read(self) -> tuple[bool, np.ndarray | None]:
-		return self._capture.read()
-
-	def release(self) -> None:
-		self._capture.release()
-
-
-class BmpFolderVideoProvider(VideoProvider):
-	"""Drop-in replacement for cv2.VideoCapture that reads a BMP image folder.
-
-	Hardcoded filter criteria: only files whose stem matches ``cam0_image<digits>``
-	(e.g. ``cam0_image02700.bmp``), sorted in ascending numeric order.
-	"""
-
-	_STEM_PATTERN: re.Pattern[str] = re.compile(r"^cam0_image(\d+)$")
-
-	def __init__(self, folder: str) -> None:
-		folder_path = Path(folder)
-
-		def _sort_key(p: Path) -> int:
-			m = self._STEM_PATTERN.match(p.stem)
-			return int(m.group(1)) if m else -1
-
-		candidates = sorted(folder_path.glob("*.bmp"), key=_sort_key)
-		self._files: list[Path] = [p for p in candidates if self._STEM_PATTERN.match(p.stem)]
-		self._index: int = 0
-		self._width: int = 0
-		if self._files:
-			probe = cv2.imread(str(self._files[0]))
-			if probe is not None:
-				self._width = probe.shape[1]
-
-	def is_opened(self) -> bool:
-		return bool(self._files) and self._width > 0
-
-	def frame_width(self) -> int:
-		return self._width
-
-	def fps(self) -> float:
-		return 0.0  # not derivable from still images; caller must supply --fps
-
-	def read(self) -> tuple[bool, np.ndarray | None]:
-		if self._index >= len(self._files):
-			return False, None
-		frame = cv2.imread(str(self._files[self._index]))
-		self._index += 1
-		if frame is None:
-			return False, None
-		return True, frame
-
-	def release(self) -> None:
-		pass  # nothing to close
-
-
 def create_video_provider(args: argparse.Namespace) -> VideoProvider:
+	source_count = int(bool(args.video))
+	source_count += int(bool(args.bmp_folder))
+	source_count += int(bool(args.loop_bmp_folder))
+	source_count += int(args.camera_index is not None)
+
+	if source_count > 1:
+		raise ValueError("provide exactly one source: video file, --bmp-folder, --loop-bmp-folder, or --camera-index")
+
+	if args.camera_index is not None:
+		provider = OpenCvCameraVideoProvider(args.camera_index)
+		if not provider.is_opened():
+			raise ValueError(f"cannot open camera index {args.camera_index}")
+		return provider
+
+	if args.loop_bmp_folder:
+		provider = LoopingBmpFolderVideoProvider(args.loop_bmp_folder)
+		if not provider.is_opened():
+			raise ValueError(f"cannot open looping BMP folder '{args.loop_bmp_folder}'")
+		return provider
+
 	if args.bmp_folder:
 		provider = BmpFolderVideoProvider(args.bmp_folder)
 		if not provider.is_opened():
@@ -416,7 +359,7 @@ def create_video_provider(args: argparse.Namespace) -> VideoProvider:
 			raise ValueError(f"cannot open video '{args.video}'")
 		return provider
 
-	raise ValueError("provide either a video file or --bmp-folder")
+	raise ValueError("provide either a video file, --bmp-folder, --loop-bmp-folder, or --camera-index")
 
 
 def create_estimator(name: str) -> MotionEstimator:
@@ -461,6 +404,18 @@ def parse_args() -> argparse.Namespace:
 		default=None,
 		metavar="DIR",
 		help="Path to folder of BMP images to process instead of a video file",
+	)
+	parser.add_argument(
+		"--loop-bmp-folder",
+		default=None,
+		metavar="DIR",
+		help="Path to folder of BMP images that should loop from the first image after the last",
+	)
+	parser.add_argument(
+		"--camera-index",
+		type=int,
+		default=None,
+		help="Camera device index to stream from (e.g. 0 for default webcam)",
 	)
 	parser.add_argument(
 		"--display",
