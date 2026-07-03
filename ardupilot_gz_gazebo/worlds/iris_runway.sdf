@@ -68,10 +68,10 @@
     </spherical_coordinates>
 
     <include>
-      <uri>model://runway</uri>
-        <pose degrees="true">-29 545 0 0 0 363</pose>
+      <uri>model://aerial_ground</uri>
+      <pose degrees="true">0 0 0 0 0 0</pose>
     </include>
-    
+
     <include>
       <uri>model://iris_with_gimbal</uri>
       <name>iris</name>

@@ -1,0 +1,103 @@
+<?xml version='1.0'?>
+<sdf version="1.9">
+  <model name="aerial_ground">
+    <static>true</static>
+    <link name="ground_link">
+
+      <!-- Finite thin box instead of an infinite <plane>: ODE builds an
+           infinite AABB for a collision plane, which overflows its integer
+           bounds and aborts the sim ("ODE INTERNAL ERROR 1 ... collide()").
+           A single box under all four texture tiles gives flat ground. -->
+      <collision name="collision">
+        <pose>0 0 -0.05 0 0 0</pose>
+        <geometry>
+          <box>
+            <size>240 240 0.1</size>
+          </box>
+        </geometry>
+      </collision>
+
+      <!-- Four distinct aerial photos laid out as a 2x2 grid (each 120x120 m,
+           centred at +/-60). Distinct, non-repeating terrain gives the downward
+           camera real features to track for visual odometry, instead of one
+           tiled texture that aliases and makes motion look ambiguous. -->
+
+      <visual name="tile_00">
+        <pose>-60 -60 0 0 0 0</pose>
+        <geometry>
+          <plane><normal>0 0 1</normal><size>120 120</size></plane>
+        </geometry>
+        <material>
+          <ambient>1 1 1 1</ambient>
+          <diffuse>1 1 1 1</diffuse>
+          <specular>0 0 0 1</specular>
+          <pbr>
+            <metal>
+              <albedo_map>model://aerial_ground/materials/textures/tile_00.png</albedo_map>
+              <metalness>0</metalness>
+              <roughness>1</roughness>
+            </metal>
+          </pbr>
+        </material>
+      </visual>
+
+      <visual name="tile_10">
+        <pose>60 -60 0 0 0 0</pose>
+        <geometry>
+          <plane><normal>0 0 1</normal><size>120 120</size></plane>
+        </geometry>
+        <material>
+          <ambient>1 1 1 1</ambient>
+          <diffuse>1 1 1 1</diffuse>
+          <specular>0 0 0 1</specular>
+          <pbr>
+            <metal>
+              <albedo_map>model://aerial_ground/materials/textures/tile_10.png</albedo_map>
+              <metalness>0</metalness>
+              <roughness>1</roughness>
+            </metal>
+          </pbr>
+        </material>
+      </visual>
+
+      <visual name="tile_01">
+        <pose>-60 60 0 0 0 0</pose>
+        <geometry>
+          <plane><normal>0 0 1</normal><size>120 120</size></plane>
+        </geometry>
+        <material>
+          <ambient>1 1 1 1</ambient>
+          <diffuse>1 1 1 1</diffuse>
+          <specular>0 0 0 1</specular>
+          <pbr>
+            <metal>
+              <albedo_map>model://aerial_ground/materials/textures/tile_01.png</albedo_map>
+              <metalness>0</metalness>
+              <roughness>1</roughness>
+            </metal>
+          </pbr>
+        </material>
+      </visual>
+
+      <visual name="tile_11">
+        <pose>60 60 0 0 0 0</pose>
+        <geometry>
+          <plane><normal>0 0 1</normal><size>120 120</size></plane>
+        </geometry>
+        <material>
+          <ambient>1 1 1 1</ambient>
+          <diffuse>1 1 1 1</diffuse>
+          <specular>0 0 0 1</specular>
+          <pbr>
+            <metal>
+              <albedo_map>model://aerial_ground/materials/textures/tile_11.png</albedo_map>
+              <metalness>0</metalness>
+              <roughness>1</roughness>
+            </metal>
+          </pbr>
+        </material>
+      </visual>
+
+    </link>
+  </model>
+</sdf>
