@@ -11,6 +11,7 @@ COPY ./ardupilot_gz_gazebo /root/ardu_ws/src/ardupilot_gz/ardupilot_gz_gazebo
 COPY ./ardupilot_gz_bringup /root/ardu_ws/src/ardupilot_gz/ardupilot_gz_bringup
 COPY ./iris_with_gimbal /root/ardu_ws/src/ardupilot_gz/ardupilot_gz_description/models/iris_with_gimbal
 COPY ./aerial_ground /root/ardu_ws/src/ardupilot_gz/ardupilot_gz_description/models/aerial_ground
+COPY ./optical_flow /root/ardu_ws/optical_flow
 
 RUN bash -c "source /opt/ros/humble/setup.bash && \
                 colcon build --packages-select \

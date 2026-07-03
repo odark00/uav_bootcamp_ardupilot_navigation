@@ -3,14 +3,17 @@ MAVLink GUIDED circle mission + AirSim camera stream (non-blocking, high FPS).
 Works with ArduPilot SITL, AirSim SITL, and real drones.
 """
 
+import argparse
+from pathlib import Path
+import re
+import subprocess
+import sys
 import threading
-#import airsim
-import cv2
-import numpy as np
 from pymavlink import mavutil
 import time
-import math
-from queue import Queue
+
+
+OPTICAL_FLOW_LINE_PATTERN = re.compile(r"^(?P<key>[a-zA-Z_]+)=(?P<value>[^\s]+)$")
 
 
 def init_connections():
@@ -83,8 +86,185 @@ def wait_for_ekf(mav, timeout=60):
         if gps_ok and (home_ok or ekf_ok):
             print("[+] EKF ready")
             return True
-    print("[!] EKF wait timeout — arming anyway (ARMING_CHECK=0 will override)")
+    print("[!] EKF wait timeout - arming anyway (ARMING_CHECK=0 will override)")
     return False
+
+
+class OpticalFlowForwarder:
+    """Launch optical_flow_estimator.py and forward OPTICAL_FLOW text output to MAVLink."""
+
+    def __init__(
+        self,
+        mav,
+        altitude_m: float,
+        topic: str,
+        hfov: float,
+        fps: float,
+        display: bool,
+        forward_to_mavlink: bool,
+        report_every: int,
+        sensor_id: int,
+    ) -> None:
+        self._mav = mav
+        self._altitude_m = float(altitude_m)
+        self._topic = topic
+        self._hfov = float(hfov)
+        self._fps = float(fps)
+        self._display = bool(display)
+        self._forward_to_mavlink = bool(forward_to_mavlink)
+        self._report_every = max(1, int(report_every))
+        self._sensor_id = max(0, min(255, int(sensor_id)))
+
+        self._process: subprocess.Popen[str] | None = None
+        self._reader_thread: threading.Thread | None = None
+        self._stop_event = threading.Event()
+        self._send_lock = threading.Lock()
+        self._valid_flow_count = 0
+        self._last_flow_time = 0.0
+
+    def start(self) -> None:
+        root = Path(__file__).resolve().parent
+        script_path = root / "optical_flow" / "optical_flow_estimator.py"
+
+        cmd = [
+            sys.executable,
+            str(script_path),
+            "--ros-image-topic",
+            self._topic,
+            "--altitude",
+            f"{self._altitude_m}",
+            "--hfov",
+            f"{self._hfov}",
+            "--report-every",
+            str(self._report_every),
+            "--sensor-id",
+            str(self._sensor_id),
+        ]
+        if self._fps > 0:
+            cmd.extend(["--fps", f"{self._fps}"])
+        if self._display:
+            cmd.append("--display")
+
+        print("[*] Starting optical flow process:")
+        print("    " + " ".join(cmd))
+        self._process = subprocess.Popen(
+            cmd,
+            cwd=str(root),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        self._reader_thread = threading.Thread(target=self._reader_loop, daemon=True)
+        self._reader_thread.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._process is not None and self._process.poll() is None:
+            self._process.terminate()
+            try:
+                self._process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self._process.kill()
+                self._process.wait(timeout=5)
+        if self._reader_thread is not None:
+            self._reader_thread.join(timeout=2)
+
+    def _reader_loop(self) -> None:
+        if self._process is None or self._process.stdout is None:
+            return
+
+        for raw_line in self._process.stdout:
+            if self._stop_event.is_set():
+                break
+
+            line = raw_line.strip()
+            if not line:
+                continue
+
+            if line.startswith("OPTICAL_FLOW(100) "):
+                payload = self._parse_optical_flow_line(line)
+                if payload is None:
+                    print(f"[flow] Could not parse: {line}")
+                    continue
+                if self._forward_to_mavlink:
+                    self._send_optical_flow(payload)
+                    with self._send_lock:
+                        self._valid_flow_count += 1
+                        self._last_flow_time = time.time()
+                continue
+
+            print(f"[flow] {line}")
+
+        if self._process.poll() not in (None, 0):
+            print(f"[flow] Process exited with code {self._process.returncode}")
+
+    @staticmethod
+    def _parse_optical_flow_line(line: str) -> dict[str, float | int] | None:
+        result: dict[str, float | int] = {}
+        fields = line.split()[1:]
+        for field in fields:
+            match = OPTICAL_FLOW_LINE_PATTERN.match(field)
+            if not match:
+                return None
+            key = match.group("key")
+            value = match.group("value")
+            if key in {"time_usec", "sensor_id", "flow_x", "flow_y", "quality"}:
+                result[key] = int(value)
+            elif key in {"flow_comp_m_x", "flow_comp_m_y", "ground_distance"}:
+                result[key] = float(value)
+            else:
+                return None
+
+        required = {
+            "time_usec",
+            "sensor_id",
+            "flow_x",
+            "flow_y",
+            "flow_comp_m_x",
+            "flow_comp_m_y",
+            "quality",
+            "ground_distance",
+        }
+        if not required.issubset(result):
+            return None
+        return result
+
+    def _send_optical_flow(self, payload: dict[str, float | int]) -> None:
+        try:
+            with self._send_lock:
+                print(f"[flow] Forwarding to MAVLink: {payload}")
+                self._mav.mav.optical_flow_send(
+                    int(payload["time_usec"]),
+                    int(payload["sensor_id"]),
+                    int(payload["flow_x"]),
+                    int(payload["flow_y"]),
+                    float(payload["flow_comp_m_x"]),
+                    float(payload["flow_comp_m_y"]),
+                    int(payload["quality"]),
+                    float(payload["ground_distance"]),
+                )
+        except Exception as exc:
+            print(f"[flow] MAVLink forward error: {exc}")
+
+    def wait_until_ready(self, min_messages: int = 5, timeout_s: float = 10.0) -> bool:
+        """Wait until enough recent optical-flow packets were forwarded."""
+        threshold = max(1, int(min_messages))
+        deadline = time.time() + max(0.5, float(timeout_s))
+
+        while time.time() < deadline:
+            with self._send_lock:
+                count = self._valid_flow_count
+                age = time.time() - self._last_flow_time if self._last_flow_time > 0 else 9999.0
+            if count >= threshold and age < 2.0:
+                print(f"[+] Optical flow ready ({count} messages forwarded)")
+                return True
+            time.sleep(0.1)
+
+        with self._send_lock:
+            count = self._valid_flow_count
+        print(f"[!] Optical flow readiness timeout ({count}/{threshold} messages)")
+        return False
 
 
 def set_mode(mav, mode_name, timeout=5):
@@ -197,7 +377,7 @@ def send_velocity(mav, vx=0.0, vy=0.0, vz=0.0, yaw=0.0, yaw_rate=0.0):
     )
 
 def mission_guided(mav, altitude_m=10, radius=10, speed=3):
-    if not wait_for_ekf(mav, timeout=120):
+    if not wait_for_ekf(mav, timeout=150):
         print("[~] Continuing despite EKF timeout (force arm path enabled)")
 
     set_mode(mav, "GUIDED")
@@ -218,9 +398,88 @@ def mission_guided(mav, altitude_m=10, radius=10, speed=3):
     print("[+] Mission complete")
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Run guided mission and forward optical flow into ArduPilot via MAVLink."
+    )
+    parser.add_argument("--altitude", type=float, default=10.0, help="Mission takeoff altitude in meters")
+    parser.add_argument(
+        "--flow-topic",
+        default="camera/image",
+        help="ROS image topic consumed by optical flow estimator (default: camera/image)",
+    )
+    parser.add_argument("--flow-hfov", type=float, default=84.0, help="Camera HFOV used by estimator")
+    parser.add_argument("--flow-fps", type=float, default=30.0, help="Estimator FPS")
+    parser.add_argument(
+        "--flow-report-every",
+        type=int,
+        default=1,
+        help="Print one optical-flow report every N frames",
+    )
+    parser.add_argument(
+        "--flow-sensor-id",
+        type=int,
+        default=0,
+        help="MAVLink optical flow sensor ID (0..255)",
+    )
+    parser.add_argument(
+        "--flow-forward",
+        action="store_true",
+        help="Forward optical flow MAVLink messages to ArduPilot (disabled by default)",
+    )
+    parser.add_argument(
+        "--no-flow-display",
+        action="store_true",
+        help="Disable optical flow debug display window (display enabled by default)",
+    )
+    parser.add_argument(
+        "--flow-ready-timeout",
+        type=float,
+        default=10.0,
+        help="Seconds to wait for optical-flow packets before mission start (default: 10)",
+    )
+    parser.add_argument(
+        "--flow-ready-min-msgs",
+        type=int,
+        default=5,
+        help="Minimum forwarded optical-flow packets required before mission start (default: 5)",
+    )
+    parser.add_argument(
+        "--no-flow",
+        action="store_true",
+        help="Disable optical flow process launch/forwarding",
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
+    args = parse_args()
     mav = init_connections()
 
-    mission_guided(mav)
+    flow_forwarder: OpticalFlowForwarder | None = None
+    if not args.no_flow:
+        flow_forwarder = OpticalFlowForwarder(
+            mav=mav,
+            altitude_m=args.altitude,
+            topic=args.flow_topic,
+            hfov=args.flow_hfov,
+            fps=args.flow_fps,
+            display=not args.no_flow_display,
+            forward_to_mavlink=args.flow_forward,
+            report_every=args.flow_report_every,
+            sensor_id=args.flow_sensor_id,
+        )
+        flow_forwarder.start()
+        if args.flow_forward:
+            flow_forwarder.wait_until_ready(
+                min_messages=args.flow_ready_min_msgs,
+                timeout_s=args.flow_ready_timeout,
+            )
+
+    try:
+        mission_guided(mav, altitude_m=args.altitude)
+    finally:
+        if flow_forwarder is not None:
+            flow_forwarder.stop()
 
     print("[+] Mission finished. Press Q to close camera.")
