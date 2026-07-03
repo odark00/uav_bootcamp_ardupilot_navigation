@@ -49,9 +49,10 @@ def wait_for_ekf(mav, timeout=60):
     deadline = time.time() + timeout
     gps_ok = False
     home_ok = False
+    ekf_ok = False
     while time.time() < deadline:
         msg = mav.recv_match(
-            type=['GPS_RAW_INT', 'HOME_POSITION', 'STATUSTEXT'],
+            type=['GPS_RAW_INT', 'HOME_POSITION', 'STATUSTEXT', 'EKF_STATUS_REPORT'],
             blocking=True, timeout=1
         )
         if msg is None:
@@ -64,10 +65,22 @@ def wait_for_ekf(mav, timeout=60):
         elif t == 'HOME_POSITION':
             home_ok = True
             print("[+] Home position received")
+        elif t == 'EKF_STATUS_REPORT':
+            # Horizontal absolute position means EKF is fused and navigating.
+            # This is often the most reliable readiness signal in SITL.
+            if msg.flags & mavutil.mavlink.EKF_POS_HORIZ_ABS:
+                if not ekf_ok:
+                    print("[+] EKF_STATUS_REPORT: horizontal position is valid")
+                ekf_ok = True
         elif t == 'STATUSTEXT' and 'origin set' in msg.text.lower():
             home_ok = True
             print(f"[+] EKF: {msg.text.strip()}")
-        if gps_ok and home_ok:
+        elif t == 'STATUSTEXT' and 'using gps' in msg.text.lower():
+            if not ekf_ok:
+                print(f"[+] EKF: {msg.text.strip()}")
+            ekf_ok = True
+
+        if gps_ok and (home_ok or ekf_ok):
             print("[+] EKF ready")
             return True
     print("[!] EKF wait timeout — arming anyway (ARMING_CHECK=0 will override)")
@@ -184,7 +197,8 @@ def send_velocity(mav, vx=0.0, vy=0.0, vz=0.0, yaw=0.0, yaw_rate=0.0):
     )
 
 def mission_guided(mav, altitude_m=10, radius=10, speed=3):
-    #wait_for_ekf(mav, timeout=90)
+    if not wait_for_ekf(mav, timeout=120):
+        print("[~] Continuing despite EKF timeout (force arm path enabled)")
 
     set_mode(mav, "GUIDED")
 

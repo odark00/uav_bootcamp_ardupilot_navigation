@@ -14,14 +14,12 @@ try:
 	from optical_flow.video_providers.bmp_folder_video_provider import BmpFolderVideoProvider
 	from optical_flow.video_providers.camera_video_provider import OpenCvCameraVideoProvider
 	from optical_flow.video_providers.looping_bmp_folder_video_provider import LoopingBmpFolderVideoProvider
-	from optical_flow.video_providers.ros_image_topic_provider import RosImageTopicVideoProvider
 	from optical_flow.video_providers.video_file_provider import OpenCvVideoProvider
 except ModuleNotFoundError:
 	from video_providers.base_video_provider import VideoProvider
 	from video_providers.bmp_folder_video_provider import BmpFolderVideoProvider
 	from video_providers.camera_video_provider import OpenCvCameraVideoProvider
 	from video_providers.looping_bmp_folder_video_provider import LoopingBmpFolderVideoProvider
-	from video_providers.ros_image_topic_provider import RosImageTopicVideoProvider
 	from video_providers.video_file_provider import OpenCvVideoProvider
 
 
@@ -343,12 +341,17 @@ def create_video_provider(args: argparse.Namespace) -> VideoProvider:
 
 	if args.ros_image_topic:
 		try:
+			try:
+				from optical_flow.video_providers.ros_image_topic_provider import RosImageTopicVideoProvider
+			except ModuleNotFoundError:
+				from video_providers.ros_image_topic_provider import RosImageTopicVideoProvider
+
 			provider = RosImageTopicVideoProvider(
 				topic=args.ros_image_topic,
 				frame_timeout_s=args.ros_frame_timeout,
 				fallback_fps=args.ros_fps,
 			)
-		except RuntimeError as exc:
+		except (ModuleNotFoundError, RuntimeError, TypeError) as exc:
 			raise ValueError(str(exc)) from exc
 		if not provider.is_opened():
 			raise ValueError(
