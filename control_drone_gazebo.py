@@ -215,6 +215,42 @@ class OpticalFlowForwarder:
             return None
         return result
 
+    def _send_optical_flow(self, payload: dict[str, float | int]) -> None:
+        try:
+            with self._send_lock:
+                print(f"[flow] Forwarding to MAVLink: {payload}")
+                self._mav.mav.optical_flow_send(
+                    int(payload["time_usec"]),
+                    int(payload["sensor_id"]),
+                    int(payload["flow_x"]),
+                    int(payload["flow_y"]),
+                    float(payload["flow_comp_m_x"]),
+                    float(payload["flow_comp_m_y"]),
+                    int(payload["quality"]),
+                    float(payload["ground_distance"]),
+                )
+        except Exception as exc:
+            print(f"[flow] MAVLink forward error: {exc}")
+
+    def wait_until_ready(self, min_messages: int = 5, timeout_s: float = 10.0) -> bool:
+        """Wait until enough recent optical-flow packets were forwarded."""
+        threshold = max(1, int(min_messages))
+        deadline = time.time() + max(0.5, float(timeout_s))
+
+        while time.time() < deadline:
+            with self._send_lock:
+                count = self._valid_flow_count
+                age = time.time() - self._last_flow_time if self._last_flow_time > 0 else 9999.0
+            if count >= threshold and age < 2.0:
+                print(f"[+] Optical flow ready ({count} messages forwarded)")
+                return True
+            time.sleep(0.1)
+
+        with self._send_lock:
+            count = self._valid_flow_count
+        print(f"[!] Optical flow readiness timeout ({count}/{threshold} messages)")
+        return False
+
 
 def set_mode(mav, mode_name, timeout=5):
     mode_mapping = mav.mode_mapping()
