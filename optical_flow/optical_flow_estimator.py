@@ -14,12 +14,14 @@ try:
 	from optical_flow.video_providers.bmp_folder_video_provider import BmpFolderVideoProvider
 	from optical_flow.video_providers.camera_video_provider import OpenCvCameraVideoProvider
 	from optical_flow.video_providers.looping_bmp_folder_video_provider import LoopingBmpFolderVideoProvider
+	from optical_flow.video_providers.ros_image_topic_provider import RosImageTopicVideoProvider
 	from optical_flow.video_providers.video_file_provider import OpenCvVideoProvider
 except ModuleNotFoundError:
 	from video_providers.base_video_provider import VideoProvider
 	from video_providers.bmp_folder_video_provider import BmpFolderVideoProvider
 	from video_providers.camera_video_provider import OpenCvCameraVideoProvider
 	from video_providers.looping_bmp_folder_video_provider import LoopingBmpFolderVideoProvider
+	from video_providers.ros_image_topic_provider import RosImageTopicVideoProvider
 	from video_providers.video_file_provider import OpenCvVideoProvider
 
 
@@ -331,9 +333,29 @@ def create_video_provider(args: argparse.Namespace) -> VideoProvider:
 	source_count += int(bool(args.bmp_folder))
 	source_count += int(bool(args.loop_bmp_folder))
 	source_count += int(args.camera_index is not None)
+	source_count += int(bool(args.ros_image_topic))
 
 	if source_count > 1:
-		raise ValueError("provide exactly one source: video file, --bmp-folder, --loop-bmp-folder, or --camera-index")
+		raise ValueError(
+			"provide exactly one source: video file, --bmp-folder, --loop-bmp-folder, "
+			"--camera-index, or --ros-image-topic"
+		)
+
+	if args.ros_image_topic:
+		try:
+			provider = RosImageTopicVideoProvider(
+				topic=args.ros_image_topic,
+				frame_timeout_s=args.ros_frame_timeout,
+				fallback_fps=args.ros_fps,
+			)
+		except RuntimeError as exc:
+			raise ValueError(str(exc)) from exc
+		if not provider.is_opened():
+			raise ValueError(
+				f"cannot open ROS image topic '{args.ros_image_topic}' "
+				f"(timeout {args.ros_frame_timeout:.2f}s)"
+			)
+		return provider
 
 	if args.camera_index is not None:
 		provider = OpenCvCameraVideoProvider(args.camera_index)
@@ -359,7 +381,10 @@ def create_video_provider(args: argparse.Namespace) -> VideoProvider:
 			raise ValueError(f"cannot open video '{args.video}'")
 		return provider
 
-	raise ValueError("provide either a video file, --bmp-folder, --loop-bmp-folder, or --camera-index")
+	raise ValueError(
+		"provide either a video file, --bmp-folder, --loop-bmp-folder, "
+		"--camera-index, or --ros-image-topic"
+	)
 
 
 def create_estimator(name: str) -> MotionEstimator:
@@ -416,6 +441,23 @@ def parse_args() -> argparse.Namespace:
 		type=int,
 		default=None,
 		help="Camera device index to stream from (e.g. 0 for default webcam)",
+	)
+	parser.add_argument(
+		"--ros-image-topic",
+		default=None,
+		help="ROS2 sensor_msgs/Image topic (e.g. camera/image)",
+	)
+	parser.add_argument(
+		"--ros-fps",
+		type=float,
+		default=30.0,
+		help="Fallback FPS for ROS image topic when timestamps are unavailable (default: 30)",
+	)
+	parser.add_argument(
+		"--ros-frame-timeout",
+		type=float,
+		default=1.0,
+		help="ROS image topic frame timeout in seconds (default: 1.0)",
 	)
 	parser.add_argument(
 		"--display",
