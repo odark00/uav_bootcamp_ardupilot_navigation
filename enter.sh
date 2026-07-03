@@ -1,0 +1,1 @@
+docker exec -it uav_bootcamp_ardupilot_navigation-ardupilot-sitl-1 bash
