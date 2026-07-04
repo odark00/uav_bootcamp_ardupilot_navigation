@@ -12,7 +12,7 @@
         <pose>0 0 -0.05 0 0 0</pose>
         <geometry>
           <box>
-            <size>240 240 0.1</size>
+            <size>5000 5000 0.1</size>
           </box>
         </geometry>
       </collision>
@@ -22,10 +22,10 @@
            camera real features to track for visual odometry, instead of one
            tiled texture that aliases and makes motion look ambiguous. -->
 
-      <visual name="tile_00">
-        <pose>-60 -60 0 0 0 0</pose>
+      <visual name="texture_world">
+        <pose>0 0 0 0 0 0</pose>
         <geometry>
-          <plane><normal>0 0 1</normal><size>120 120</size></plane>
+          <plane><normal>0 0 1</normal><size>5000 5000</size></plane>
         </geometry>
         <material>
           <ambient>1 1 1 1</ambient>
@@ -33,64 +33,7 @@
           <specular>0 0 0 1</specular>
           <pbr>
             <metal>
-              <albedo_map>model://aerial_ground/materials/textures/tile_00.png</albedo_map>
-              <metalness>0</metalness>
-              <roughness>1</roughness>
-            </metal>
-          </pbr>
-        </material>
-      </visual>
-
-      <visual name="tile_10">
-        <pose>60 -60 0 0 0 0</pose>
-        <geometry>
-          <plane><normal>0 0 1</normal><size>120 120</size></plane>
-        </geometry>
-        <material>
-          <ambient>1 1 1 1</ambient>
-          <diffuse>1 1 1 1</diffuse>
-          <specular>0 0 0 1</specular>
-          <pbr>
-            <metal>
-              <albedo_map>model://aerial_ground/materials/textures/tile_10.png</albedo_map>
-              <metalness>0</metalness>
-              <roughness>1</roughness>
-            </metal>
-          </pbr>
-        </material>
-      </visual>
-
-      <visual name="tile_01">
-        <pose>-60 60 0 0 0 0</pose>
-        <geometry>
-          <plane><normal>0 0 1</normal><size>120 120</size></plane>
-        </geometry>
-        <material>
-          <ambient>1 1 1 1</ambient>
-          <diffuse>1 1 1 1</diffuse>
-          <specular>0 0 0 1</specular>
-          <pbr>
-            <metal>
-              <albedo_map>model://aerial_ground/materials/textures/tile_01.png</albedo_map>
-              <metalness>0</metalness>
-              <roughness>1</roughness>
-            </metal>
-          </pbr>
-        </material>
-      </visual>
-
-      <visual name="tile_11">
-        <pose>60 60 0 0 0 0</pose>
-        <geometry>
-          <plane><normal>0 0 1</normal><size>120 120</size></plane>
-        </geometry>
-        <material>
-          <ambient>1 1 1 1</ambient>
-          <diffuse>1 1 1 1</diffuse>
-          <specular>0 0 0 1</specular>
-          <pbr>
-            <metal>
-              <albedo_map>model://aerial_ground/materials/textures/tile_11.png</albedo_map>
+              <albedo_map>model://aerial_ground/materials/textures/aerial_ground.jpg</albedo_map>
               <metalness>0</metalness>
               <roughness>1</roughness>
             </metal>

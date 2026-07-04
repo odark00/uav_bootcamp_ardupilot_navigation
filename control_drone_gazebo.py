@@ -209,7 +209,7 @@ def mission_guided(mav, altitude_m=10, radius=10, speed=3):
 
     duration = 60
     end = time.time() + duration
-    while time.time() < end:
+    while True: #time.time() < end:
         print("send_velocity")
         send_velocity(mav, vx=2, vy=0, vz=0, yaw=0, yaw_rate=0.3)
         time.sleep(0.05)
