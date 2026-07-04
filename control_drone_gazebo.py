@@ -361,8 +361,8 @@ def send_velocity(mav, vx=0.0, vy=0.0, vz=0.0, yaw=0.0, yaw_rate=0.0):
         )
     )
 
-def mission_guided(mav, altitude_m=10, radius=10, speed=3):
-    if not wait_for_ekf(mav, timeout=150):
+def mission_guided(mav, altitude_m=10, radius=25, speed=3):
+    if not wait_for_ekf(mav, timeout=120):
         print("[~] Continuing despite EKF timeout (force arm path enabled)")
 
     set_mode(mav, "GUIDED")
@@ -372,11 +372,12 @@ def mission_guided(mav, altitude_m=10, radius=10, speed=3):
 
     takeoff(mav, altitude_m)
 
+    yaw_rate=speed/radius
     duration = 60
     end = time.time() + duration
     while True: #time.time() < end:
         print("send_velocity")
-        send_velocity(mav, vx=2, vy=0, vz=0, yaw=0, yaw_rate=0.3)
+        send_velocity(mav, vx=speed, vy=0, vz=0, yaw=0, yaw_rate=yaw_rate)
         time.sleep(0.05)
 
     land(mav)
@@ -390,7 +391,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--altitude", type=float, default=10.0, help="Mission takeoff altitude in meters")
     parser.add_argument(
         "--flow-topic",
-        default="camera/image",
+        default="/camera/image",
         help="ROS image topic consumed by optical flow estimator (default: camera/image)",
     )
     parser.add_argument("--flow-hfov", type=float, default=84.0, help="Camera HFOV used by estimator")

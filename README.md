@@ -1,5 +1,21 @@
 # UAV Bootcamp ArduPilot Navigation
 
+## Run As Two Separate Scripts
+
+Use two terminals in the same ROS-enabled environment.
+
+### 1) Run control script with optical flow disabled
+
+```bash
+python control_drone_gazebo.py --no-flow --altitude 10
+```
+
+### 2) Run optical flow script separately
+
+```bash
+python optical_flow/optical_flow_estimator.py --ros-image-topic /camera/image --altitude 10 --fps 30 --display --estimator yaw_robust
+```
+
 ## Optical Flow Provider Launch
 
 Run from the project root:

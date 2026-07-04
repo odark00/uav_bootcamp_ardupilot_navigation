@@ -20,3 +20,5 @@ RUN bash -c "source /opt/ros/humble/setup.bash && \
                 ardupilot_gz_gazebo \
                 ardupilot_gz_application \
                 ardupilot_sitl_models"
+
+RUN echo "source /root/ardu_ws/install/setup.bash" >> /root/.bashrc

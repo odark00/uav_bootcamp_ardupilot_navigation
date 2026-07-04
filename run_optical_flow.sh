@@ -1,0 +1,1 @@
+docker exec -it uav_bootcamp_ardupilot_navigation-ardupilot-sitl-1 bash -lc "python optical_flow/optical_flow_estimator.py --ros-image-topic /camera/image --altitude 10 --fps 30 --display --estimator yaw_robust; exec bash"

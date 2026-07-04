@@ -1,0 +1,1 @@
+docker exec -it uav_bootcamp_ardupilot_navigation-ardupilot-sitl-1 bash -lc "python control_drone_gazebo.py --no-flow --altitude 10; exec bash"
