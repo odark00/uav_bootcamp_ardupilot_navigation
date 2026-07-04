@@ -6,6 +6,10 @@
       <real_time_factor>1.0</real_time_factor>
     </physics>
 
+    <wind>
+      <linear_velocity>8.242640687 8.242640687 0</linear_velocity>
+    </wind>
+
     <plugin filename="gz-sim-physics-system"
       name="gz::sim::systems::Physics">
     </plugin>
