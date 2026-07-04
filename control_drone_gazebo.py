@@ -4,6 +4,7 @@ Works with ArduPilot SITL, AirSim SITL, and real drones.
 """
 
 import argparse
+from dataclasses import dataclass
 from pathlib import Path
 import re
 import subprocess
@@ -14,6 +15,29 @@ import time
 
 
 OPTICAL_FLOW_LINE_PATTERN = re.compile(r"^(?P<key>[a-zA-Z_]+)=(?P<value>[^\s]+)$")
+
+
+@dataclass
+class GpsHealth:
+    last_message_time: float = 0.0
+    last_good_fix_time: float = 0.0
+    fix_type: int = 0
+    satellites_visible: int = 0
+
+    def update(self, msg) -> None:
+        now = time.time()
+        self.last_message_time = now
+        self.fix_type = int(msg.fix_type)
+        self.satellites_visible = int(msg.satellites_visible)
+        if self.fix_type >= 3:
+            self.last_good_fix_time = now
+
+    def is_healthy(self, now: float, max_stale_s: float) -> bool:
+        if self.last_message_time <= 0.0:
+            return False
+        if now - self.last_message_time > max_stale_s:
+            return False
+        return self.fix_type >= 3
 
 
 def init_connections():
@@ -114,6 +138,12 @@ class OpticalFlowForwarder:
         self._process: subprocess.Popen[str] | None = None
         self._reader_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
+        self._state_lock = threading.Lock()
+        self._last_flow_wall_time = 0.0
+        self._last_flow_quality = 0
+        self._last_flow_comp_m_x = 0.0
+        self._last_flow_comp_m_y = 0.0
+        self._valid_flow_count = 0
 
     def start(self) -> None:
         root = Path(__file__).resolve().parent
@@ -176,13 +206,40 @@ class OpticalFlowForwarder:
                 continue
 
             if line.startswith("OPTICAL_FLOW(100) "):
-                # Never forward OPTICAL_FLOW into SITL; this process is display-only.
+                payload = self._parse_optical_flow_line(line)
+                if payload is not None:
+                    with self._state_lock:
+                        self._last_flow_wall_time = time.time()
+                        self._last_flow_quality = int(payload["quality"])
+                        self._last_flow_comp_m_x = float(payload["flow_comp_m_x"])
+                        self._last_flow_comp_m_y = float(payload["flow_comp_m_y"])
+                        self._valid_flow_count += 1
                 continue
 
             print(f"[flow] {line}")
 
         if self._process.poll() not in (None, 0):
             print(f"[flow] Process exited with code {self._process.returncode}")
+
+    def flow_health(self, max_stale_s: float, min_quality: int) -> tuple[bool, float, int, int]:
+        with self._state_lock:
+            count = self._valid_flow_count
+            quality = self._last_flow_quality
+            last_time = self._last_flow_wall_time
+        if count <= 0 or last_time <= 0.0:
+            return False, 9999.0, quality, count
+        age_s = time.time() - last_time
+        healthy = age_s <= max_stale_s and quality >= min_quality
+        return healthy, age_s, quality, count
+
+    def latest_flow_velocity_mps(self) -> tuple[float, float] | None:
+        with self._state_lock:
+            count = self._valid_flow_count
+            comp_x = self._last_flow_comp_m_x
+            comp_y = self._last_flow_comp_m_y
+        if count <= 0:
+            return None
+        return comp_x * self._fps, comp_y * self._fps
 
     @staticmethod
     def _parse_optical_flow_line(line: str) -> dict[str, float | int] | None:
@@ -214,43 +271,6 @@ class OpticalFlowForwarder:
         if not required.issubset(result):
             return None
         return result
-
-    def _send_optical_flow(self, payload: dict[str, float | int]) -> None:
-        try:
-            with self._send_lock:
-                print(f"[flow] Forwarding to MAVLink: {payload}")
-                self._mav.mav.optical_flow_send(
-                    int(payload["time_usec"]),
-                    int(payload["sensor_id"]),
-                    int(payload["flow_x"]),
-                    int(payload["flow_y"]),
-                    float(payload["flow_comp_m_x"]),
-                    float(payload["flow_comp_m_y"]),
-                    int(payload["quality"]),
-                    float(payload["ground_distance"]),
-                )
-        except Exception as exc:
-            print(f"[flow] MAVLink forward error: {exc}")
-
-    def wait_until_ready(self, min_messages: int = 5, timeout_s: float = 10.0) -> bool:
-        """Wait until enough recent optical-flow packets were forwarded."""
-        threshold = max(1, int(min_messages))
-        deadline = time.time() + max(0.5, float(timeout_s))
-
-        while time.time() < deadline:
-            with self._send_lock:
-                count = self._valid_flow_count
-                age = time.time() - self._last_flow_time if self._last_flow_time > 0 else 9999.0
-            if count >= threshold and age < 2.0:
-                print(f"[+] Optical flow ready ({count} messages forwarded)")
-                return True
-            time.sleep(0.1)
-
-        with self._send_lock:
-            count = self._valid_flow_count
-        print(f"[!] Optical flow readiness timeout ({count}/{threshold} messages)")
-        return False
-
 
 def set_mode(mav, mode_name, timeout=5):
     mode_mapping = mav.mode_mapping()
@@ -361,7 +381,95 @@ def send_velocity(mav, vx=0.0, vy=0.0, vz=0.0, yaw=0.0, yaw_rate=0.0):
         )
     )
 
-def mission_guided(mav, altitude_m=10, radius=25, speed=3):
+
+def _normalize_param_id(raw_param_id) -> str:
+    if isinstance(raw_param_id, bytes):
+        return raw_param_id.decode("ascii", errors="ignore").rstrip("\x00")
+    return str(raw_param_id).rstrip("\x00")
+
+
+def _read_param_value(mav, param_name: str, timeout_s: float = 1.5) -> float | None:
+    deadline = time.time() + max(0.2, float(timeout_s))
+    mav.mav.param_request_read_send(
+        mav.target_system,
+        mav.target_component,
+        param_name.encode("ascii"),
+        -1,
+    )
+    while time.time() < deadline:
+        msg = mav.recv_match(type='PARAM_VALUE', blocking=True, timeout=0.2)
+        if msg is None:
+            continue
+        if _normalize_param_id(msg.param_id) == param_name:
+            return float(msg.param_value)
+    return None
+
+
+def _set_param_with_confirm(
+    mav,
+    param_name: str,
+    value: float,
+    param_type: int,
+    timeout_s: float = 2.0,
+) -> bool:
+    mav.mav.param_set_send(
+        mav.target_system,
+        mav.target_component,
+        param_name.encode("ascii"),
+        float(value),
+        param_type,
+    )
+
+    confirmed = _read_param_value(mav, param_name, timeout_s=timeout_s)
+    if confirmed is None:
+        return False
+    return abs(float(confirmed) - float(value)) < 0.01
+
+
+def trigger_disable_gps(mav) -> bool:
+    # Try multiple ArduPilot SITL parameter names for cross-version compatibility.
+    candidates: list[tuple[str, float, int]] = [
+        ("SIM_GPS_DISABLE", 1.0, mavutil.mavlink.MAV_PARAM_TYPE_INT8),
+        ("SIM_GPS1_DISABLE", 1.0, mavutil.mavlink.MAV_PARAM_TYPE_INT8),
+        ("SIM_GPS1_ENABLE", 0.0, mavutil.mavlink.MAV_PARAM_TYPE_INT8),
+        ("GPS_TYPE", 0.0, mavutil.mavlink.MAV_PARAM_TYPE_INT8),
+        ("GPS1_TYPE", 0.0, mavutil.mavlink.MAV_PARAM_TYPE_INT8),
+    ]
+
+    for param_name, value, param_type in candidates:
+        print(f"[*] Trying GPS disable via {param_name}={value:g}")
+        if _set_param_with_confirm(mav, param_name, value, param_type):
+            print(f"[+] GPS disable trigger armed with {param_name}={value:g}")
+            return True
+
+    print("[!] Failed to disable GPS using known SITL parameters")
+    return False
+
+
+def _poll_health_messages(mav, gps_health: GpsHealth) -> None:
+    while True:
+        msg = mav.recv_match(type=['GPS_RAW_INT'], blocking=False)
+        if msg is None:
+            break
+        if msg.get_type() == 'GPS_RAW_INT':
+            gps_health.update(msg)
+
+
+def mission_guided(
+    mav,
+    altitude_m=10.0,
+    radius=25.0,
+    speed=3.0,
+    duration_s=120.0,
+    gps_loss_timeout_s=1.5,
+    fallback_speed=2.0,
+    flow_forwarder: OpticalFlowForwarder | None = None,
+    flow_max_stale_s=1.5,
+    flow_min_quality=30,
+    fallback_lateral_gain=0.8,
+    fallback_max_vy=1.5,
+    disable_gps_after_takeoff_s=15.0,
+):
     if not wait_for_ekf(mav, timeout=120):
         print("[~] Continuing despite EKF timeout (force arm path enabled)")
 
@@ -372,12 +480,77 @@ def mission_guided(mav, altitude_m=10, radius=25, speed=3):
 
     takeoff(mav, altitude_m)
 
-    yaw_rate=speed/radius
-    duration = 60
-    end = time.time() + duration
-    while True: #time.time() < end:
-        print("send_velocity")
-        send_velocity(mav, vx=speed, vy=0, vz=0, yaw=0, yaw_rate=yaw_rate)
+    yaw_rate = speed / max(0.5, radius)
+    gps_health = GpsHealth()
+    mode = "CIRCLE_GPS"
+    mission_end = time.time() + max(1.0, float(duration_s))
+    next_status_at = 0.0
+    gps_disable_triggered = False
+    gps_disable_at = (
+        time.time() + float(disable_gps_after_takeoff_s)
+        if float(disable_gps_after_takeoff_s) >= 0.0
+        else None
+    )
+
+    print(
+        "[*] Mission started: GPS circle mode. "
+        "If GPS is lost, switching to straight-forward vision-assisted mode."
+    )
+
+    while time.time() < mission_end:
+        _poll_health_messages(mav, gps_health)
+        now = time.time()
+
+        if gps_disable_at is not None and (not gps_disable_triggered) and now >= gps_disable_at:
+            print(f"[trigger] Disabling GPS at +{disable_gps_after_takeoff_s:.1f}s after takeoff")
+            trigger_disable_gps(mav)
+            gps_disable_triggered = True
+
+        gps_ok = gps_health.is_healthy(now, max_stale_s=max(0.2, float(gps_loss_timeout_s)))
+        target_mode = "CIRCLE_GPS" if gps_ok else "STRAIGHT_VISION"
+
+        if target_mode != mode:
+            mode = target_mode
+            print(f"[mode] Switched to {mode}")
+
+        if mode == "CIRCLE_GPS":
+            cmd_vx = float(speed)
+            cmd_vy = 0.0
+            cmd_yaw_rate = yaw_rate
+            flow_note = ""
+        else:
+            cmd_vx = float(fallback_speed)
+            cmd_vy = 0.0
+            cmd_yaw_rate = 0.0
+            flow_note = "flow=unavailable"
+
+            if flow_forwarder is not None:
+                flow_ok, flow_age, flow_quality, flow_count = flow_forwarder.flow_health(
+                    max_stale_s=float(flow_max_stale_s),
+                    min_quality=int(flow_min_quality),
+                )
+                if flow_ok:
+                    velocity = flow_forwarder.latest_flow_velocity_mps()
+                    if velocity is not None:
+                        _, flow_vy = velocity
+                        raw_correction = -float(fallback_lateral_gain) * float(flow_vy)
+                        cmd_vy = max(-float(fallback_max_vy), min(float(fallback_max_vy), raw_correction))
+                    flow_note = (
+                        f"flow=ok q={flow_quality} age={flow_age:.2f}s "
+                        f"msgs={flow_count} vy_cmd={cmd_vy:.2f}"
+                    )
+                else:
+                    flow_note = f"flow=bad q={flow_quality} age={flow_age:.2f}s msgs={flow_count}"
+
+        send_velocity(mav, vx=cmd_vx, vy=cmd_vy, vz=0.0, yaw=0.0, yaw_rate=cmd_yaw_rate)
+
+        if now >= next_status_at:
+            print(
+                f"[status] mode={mode} gps_fix={gps_health.fix_type} sats={gps_health.satellites_visible} "
+                f"vx={cmd_vx:.2f} vy={cmd_vy:.2f} yaw_rate={cmd_yaw_rate:.3f} {flow_note}"
+            )
+            next_status_at = now + 1.0
+
         time.sleep(0.05)
 
     land(mav)
@@ -389,6 +562,51 @@ def parse_args() -> argparse.Namespace:
         description="Run guided mission with optional optical-flow display (no SITL forwarding)."
     )
     parser.add_argument("--altitude", type=float, default=10.0, help="Mission takeoff altitude in meters")
+    parser.add_argument("--duration", type=float, default=120.0, help="Mission duration in seconds")
+    parser.add_argument("--circle-radius", type=float, default=25.0, help="GPS-mode circle radius in meters")
+    parser.add_argument("--circle-speed", type=float, default=3.0, help="GPS-mode circle forward speed in m/s")
+    parser.add_argument(
+        "--gps-loss-timeout",
+        type=float,
+        default=1.5,
+        help="Switch to fallback if GPS_RAW_INT is stale or degraded longer than this (seconds)",
+    )
+    parser.add_argument(
+        "--disable-gps-after-takeoff",
+        type=float,
+        default=10.0,
+        help="Disable GPS this many seconds after takeoff (set <0 to disable trigger)",
+    )
+    parser.add_argument(
+        "--fallback-speed",
+        type=float,
+        default=2.0,
+        help="Straight-forward speed in fallback mode (m/s)",
+    )
+    parser.add_argument(
+        "--flow-min-quality",
+        type=int,
+        default=30,
+        help="Minimum optical-flow quality (0..255) for lateral wind compensation",
+    )
+    parser.add_argument(
+        "--flow-max-stale",
+        type=float,
+        default=1.5,
+        help="Max accepted age of last optical-flow message in seconds",
+    )
+    parser.add_argument(
+        "--fallback-lateral-gain",
+        type=float,
+        default=1.0,
+        help="Gain from flow lateral velocity estimate to fallback vy correction",
+    )
+    parser.add_argument(
+        "--fallback-max-vy",
+        type=float,
+        default=1.5,
+        help="Clamp for lateral correction in fallback mode (m/s)",
+    )
     parser.add_argument(
         "--flow-topic",
         default="/camera/image",
@@ -439,7 +657,21 @@ if __name__ == "__main__":
         flow_forwarder.start()
 
     try:
-        mission_guided(mav, altitude_m=args.altitude)
+        mission_guided(
+            mav,
+            altitude_m=args.altitude,
+            radius=args.circle_radius,
+            speed=args.circle_speed,
+            duration_s=args.duration,
+            gps_loss_timeout_s=args.gps_loss_timeout,
+            fallback_speed=args.fallback_speed,
+            flow_forwarder=flow_forwarder,
+            flow_max_stale_s=args.flow_max_stale,
+            flow_min_quality=args.flow_min_quality,
+            fallback_lateral_gain=args.fallback_lateral_gain,
+            fallback_max_vy=args.fallback_max_vy,
+            disable_gps_after_takeoff_s=args.disable_gps_after_takeoff,
+        )
     finally:
         if flow_forwarder is not None:
             flow_forwarder.stop()
