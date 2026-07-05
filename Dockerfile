@@ -6,6 +6,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 COPY ./control_drone_gazebo.py /root/ardu_ws/control_drone_gazebo.py
+COPY ./nogps_control_drone_gazebo.py /root/ardu_ws/nogps_control_drone_gazebo.py
 COPY ./ardupilot_gz_gazebo /root/ardu_ws/src/ardupilot_gz/ardupilot_gz_gazebo
 COPY ./ardupilot_gz_bringup /root/ardu_ws/src/ardupilot_gz/ardupilot_gz_bringup
 COPY ./iris_with_gimbal /root/ardu_ws/src/ardupilot_gz/ardupilot_gz_description/models/iris_with_gimbal
