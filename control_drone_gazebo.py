@@ -58,6 +58,80 @@ def get_altitude(mav):
     return 0.0
 
 
+def request_message(mav, msg_id, hz):
+    """Ask the autopilot to stream a message at the given rate (Hz)."""
+    mav.mav.command_long_send(
+        mav.target_system, mav.target_component,
+        mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL,
+        0,
+        msg_id, int(1e6 / hz), 0, 0, 0, 0, 0,
+    )
+
+
+# --- Barometric altitude (GPS-denied: reliable, unlike GLOBAL_POSITION_INT) -- #
+def pressure_to_alt(press_hpa, ground_hpa):
+    """International barometric formula -> metres above the ground reference."""
+    return 44330.0 * (1.0 - (press_hpa / ground_hpa) ** (1.0 / 5.255))
+
+
+def read_pressure(mav):
+    """Newest absolute pressure (hPa) from SCALED_PRESSURE, or None if none buffered."""
+    press = None
+    while True:
+        msg = mav.recv_match(type="SCALED_PRESSURE", blocking=False)
+        if msg is None:
+            break
+        press = msg.press_abs
+    return press
+
+
+def capture_ground_pressure(mav, samples=10):
+    """Average a few barometer readings to establish the ground reference (hPa)."""
+    print("[*] Reading ground barometer reference...")
+    readings = []
+    deadline = time.time() + 10
+    while len(readings) < samples and time.time() < deadline:
+        press = read_pressure(mav)
+        if press is not None:
+            readings.append(press)
+        time.sleep(0.1)
+    if not readings:
+        raise RuntimeError("No SCALED_PRESSURE received - is the baro streaming?")
+    ground = sum(readings) / len(readings)
+    print(f"[+] Ground pressure: {ground:.2f} hPa")
+    return ground
+
+
+# --- Magnetometer heading (compass-only while GPS is disabled) -------------- #
+def read_heading_deg(mav):
+    """Latest magnetometer heading in DEGREES (0=N, cw+) from VFR_HUD, or None.
+
+    GPS is disabled, so VFR_HUD.heading is derived purely from the compass -- the
+    vehicle's nose direction, matching the yaw convention of SET_ATTITUDE_TARGET.
+    """
+    heading = None
+    while True:
+        msg = mav.recv_match(type="VFR_HUD", blocking=False)
+        if msg is None:
+            break
+        heading = msg.heading
+    return None if heading is None else float(heading)
+
+
+def wait_for_heading_deg(mav, timeout=10):
+    """Block until the magnetometer heading is available; return it (degrees)."""
+    print("[*] Reading magnetometer heading...")
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        heading = read_heading_deg(mav)
+        if heading is not None:
+            print(f"[+] Nose heading: {heading:.0f} deg (magnetometer)")
+            return heading
+        time.sleep(0.1)
+    print("[!] No VFR_HUD heading - defaulting to 0 (North)")
+    return 0.0
+
+
 def is_armed(mav):
     # Drain buffered messages so we get the latest heartbeat
     msg = None
@@ -72,45 +146,33 @@ def is_armed(mav):
 
 
 def wait_for_ekf(mav, timeout=60):
-    """Wait for GPS fix and EKF home position before arming."""
-    print("[*] Waiting for GPS + EKF convergence...")
+    """Wait for the EKF to converge enough to arm.
+
+    This is a GPS-DENIED sim (see config/gps_denied.parm: GPS_TYPE=0,
+    EK3_SRC1_POSXY=0, EK3_SRC1_VELXY=0), so there is no GPS fix, no HOME_POSITION,
+    and the EKF_POS_HORIZ_ABS flag is never set. Blocking on any of those would
+    always time out. Instead we wait for EKF ATTITUDE convergence, which is the
+    strongest readiness signal available without a horizontal position source.
+    The EKF runs in constant-position mode (EKF_CONST_POS_MODE) and provides
+    attitude + baro altitude only.
+    """
+    print("[*] Waiting for EKF attitude convergence (GPS-denied)...")
     deadline = time.time() + timeout
-    gps_ok = False
-    home_ok = False
-    ekf_ok = False
     while time.time() < deadline:
         msg = mav.recv_match(
-            type=['GPS_RAW_INT', 'HOME_POSITION', 'STATUSTEXT', 'EKF_STATUS_REPORT'],
+            type=['EKF_STATUS_REPORT', 'STATUSTEXT'],
             blocking=True, timeout=1
         )
         if msg is None:
             continue
         t = msg.get_type()
-        if t == 'GPS_RAW_INT' and msg.fix_type >= 3:
-            if not gps_ok:
-                print(f"[+] GPS fix ({msg.fix_type}D, sats={msg.satellites_visible})")
-            gps_ok = True
-        elif t == 'HOME_POSITION':
-            home_ok = True
-            print("[+] Home position received")
-        elif t == 'EKF_STATUS_REPORT':
-            # Horizontal absolute position means EKF is fused and navigating.
-            # This is often the most reliable readiness signal in SITL.
-            if msg.flags & mavutil.mavlink.EKF_POS_HORIZ_ABS:
-                if not ekf_ok:
-                    print("[+] EKF_STATUS_REPORT: horizontal position is valid")
-                ekf_ok = True
-        elif t == 'STATUSTEXT' and 'origin set' in msg.text.lower():
-            home_ok = True
+        if t == 'EKF_STATUS_REPORT':
+            # Attitude estimate valid = usable for GUIDED_NOGPS / attitude flight.
+            if msg.flags & mavutil.mavlink.EKF_ATTITUDE:
+                print("[+] EKF ready (attitude valid, no GPS)")
+                return True
+        elif t == 'STATUSTEXT' and 'ekf3 imu0 is using' in msg.text.lower():
             print(f"[+] EKF: {msg.text.strip()}")
-        elif t == 'STATUSTEXT' and 'using gps' in msg.text.lower():
-            if not ekf_ok:
-                print(f"[+] EKF: {msg.text.strip()}")
-            ekf_ok = True
-
-        if gps_ok and (home_ok or ekf_ok):
-            print("[+] EKF ready")
-            return True
     print("[!] EKF wait timeout - arming anyway (ARMING_CHECK=0 will override)")
     return False
 
@@ -328,7 +390,6 @@ def arm(mav, force=False, timeout=15):
     return False
 
 
-
 def takeoff(mav, altitude_m):
     print(f"[*] Takeoff to {altitude_m}m...")
 
@@ -347,18 +408,57 @@ def takeoff(mav, altitude_m):
         time.sleep(0.1)
 
 
-def land(mav):
-    print("[*] Landing...")
-    set_mode(mav, "LAND")
+# GUIDED_NOGPS climb/altitude-hold tunables (attitude + thrust only).
+TAKEOFF_THRUST = 0.62   # climb thrust while ascending (0-1, must exceed hover)
+ALT_ACCURACY = 0.4      # takeoff "reached" when within +/- this of target (m)
+ALT_BAND = 1.0          # allowed height wobble during forward flight (m)
+HOVER_THRUST = 0.5      # baseline thrust; P-control trims around it
+KP_ALT = 0.08           # thrust change per metre of altitude error
+MIN_THRUST = 0.10       # never idle the motors in flight
+MAX_THRUST = 0.75       # climb thrust ceiling
+NOGPS_LOOP_HZ = 25.0    # attitude command rate (keep well above 2 Hz)
 
+
+def alt_thrust(current_alt, target_alt):
+    """Proportional thrust around HOVER_THRUST to drive altitude to target."""
+    thrust = HOVER_THRUST + KP_ALT * (target_alt - current_alt)
+    return max(MIN_THRUST, min(MAX_THRUST, thrust))
+
+
+def takeoff_nogps(mav, altitude_m, ground_hpa, hold_yaw_deg):
+    """Climb STRAIGHT UP holding the current heading to a baro altitude target.
+
+    Ported from takeoff_to() in nogps_control_drone_gazebo.py (the known-good
+    GPS-denied takeoff). Two things keep the ascent vertical:
+      * yaw is held at the captured nose heading (hold_yaw_deg), NOT forced to 0
+        (north) -- forcing 0 makes the drone yaw and tilt during the climb.
+      * altitude is the BARO height above the captured ground reference, which is
+        reliable while GPS-denied (GLOBAL_POSITION_INT.relative_alt is not).
+    Climb at TAKEOFF_THRUST, then ease in with P-control for the final capture so
+    we don't overshoot.
+    """
+    target = float(altitude_m)
+    print(f"[*] Takeoff (GUIDED_NOGPS) to {target:.1f} m (+/- {ALT_ACCURACY:.1f} m), "
+          f"holding {hold_yaw_deg:.0f} deg, at thrust {TAKEOFF_THRUST:.2f}...")
+    dt = 1.0 / NOGPS_LOOP_HZ
+    alt = 0.0
     while True:
-        alt = get_altitude(mav)
-        print(f"    Alt: {alt:.2f}m", end="\r")
-        if alt < 0.3:
-            print("\n[+] Landed")
-            break
-        time.sleep(0.1)
-
+        press = read_pressure(mav)
+        if press is not None:
+            alt = pressure_to_alt(press, ground_hpa)
+        # Full takeoff thrust while climbing, then P-control for the final
+        # capture so we ease in instead of overshooting the target height.
+        if alt < target - ALT_ACCURACY:
+            thrust = TAKEOFF_THRUST
+        else:
+            thrust = alt_thrust(alt, target)
+        # Level, nose held: all thrust goes into a vertical climb.
+        send_attitude(mav, roll_deg=0.0, pitch_deg=0.0, yaw_deg=hold_yaw_deg, thrust=thrust)
+        print(f"    Baro alt: {alt:5.2f} / {target:.1f} m  thrust: {thrust:.2f}", end="\r")
+        if abs(alt - target) <= ALT_ACCURACY:
+            print(f"\n[+] Reached {alt:.2f} m, cruising")
+            return
+        time.sleep(dt)
 
 
 def send_velocity(
@@ -399,6 +499,41 @@ def send_velocity(
             yaw,
             yaw_rate,
         )
+    )
+
+
+def euler_to_quaternion(roll, pitch, yaw):
+    """(roll, pitch, yaw) in radians -> [w, x, y, z]."""
+    cr, sr = math.cos(roll / 2), math.sin(roll / 2)
+    cp, sp = math.cos(pitch / 2), math.sin(pitch / 2)
+    cy, sy = math.cos(yaw / 2), math.sin(yaw / 2)
+    return [
+        cr * cp * cy + sr * sp * sy,  # w
+        sr * cp * cy - cr * sp * sy,  # x
+        cr * sp * cy + sr * cp * sy,  # y
+        cr * cp * sy - sr * sp * cy,  # z
+    ]
+
+
+def send_attitude(mav, roll_deg=0.0, pitch_deg=0.0, yaw_deg=0.0, thrust=0.5):
+    """One attitude + thrust setpoint for GUIDED_NOGPS. Call at >=10 Hz.
+
+    GUIDED_NOGPS has no horizontal position/velocity estimate, so it accepts
+    attitude, not velocity. With the default GUID_OPTIONS the `thrust` field is a
+    CLIMB-RATE proxy vs baro altitude: 0.5 = hold, >0.5 climb, <0.5 descend.
+    pitch < 0 = nose down = forward; yaw is absolute (0 = north).
+    """
+    q = euler_to_quaternion(
+        math.radians(roll_deg), math.radians(pitch_deg), math.radians(yaw_deg)
+    )
+    # type_mask 0b00000111: ignore the three body-rate fields; use attitude + thrust.
+    mav.mav.set_attitude_target_send(
+        0,
+        mav.target_system, mav.target_component,
+        0b00000111,
+        q,
+        0.0, 0.0, 0.0,
+        float(max(0.0, min(1.0, thrust))),
     )
 
 
@@ -524,140 +659,179 @@ def _poll_health_messages(mav, gps_health: GpsHealth) -> None:
             gps_health.update(msg)
 
 
-def mission_guided(
-    mav,
-    altitude_m=10.0,
-    speed=3.0,
-    duration_s=120.0,
-    flow_forwarder: OpticalFlowForwarder | None = None,
-    flow_max_stale_s=1.5,
-    flow_min_quality=30,
-    fallback_lateral_gain=0.8,
-    fallback_max_vy=1.5,
-    disable_gps_after_takeoff_s=15.0,
-):
-    if not wait_for_ekf(mav, timeout=120):
-        print("[~] Continuing despite EKF timeout (force arm path enabled)")
+# def mission_guided(
+#     mav,
+#     altitude_m=10.0,
+#     speed=3.0,
+#     duration_s=120.0,
+#     flow_forwarder: OpticalFlowForwarder | None = None,
+#     flow_max_stale_s=1.5,
+#     flow_min_quality=30,
+#     fallback_lateral_gain=0.8,
+#     fallback_max_vy=1.5,
+#     disable_gps_after_takeoff_s=15.0,
+# ):
+#     if not wait_for_ekf(mav, timeout=120):
+#         print("[~] Continuing despite EKF timeout (force arm path enabled)")
 
-    set_mode(mav, "GUIDED")
+#     set_mode(mav, "GUIDED")
 
-    if not arm(mav, force=True):
-        return
+#     if not arm(mav, force=True):
+#         return
 
-    takeoff(mav, altitude_m)
+#     takeoff(mav, altitude_m)
 
-    forward_speed = float(speed)
-    gps_health = GpsHealth()
-    mission_end = time.time() + max(1.0, float(duration_s))
-    next_status_at = 0.0
-    gps_disable_triggered = False
-    gps_disable_at = (
-        time.time() + float(disable_gps_after_takeoff_s)
-        if float(disable_gps_after_takeoff_s) >= 0.0
-        else None
-    )
+#     forward_speed = float(speed)
+#     gps_health = GpsHealth()
+#     mission_end = time.time() + max(1.0, float(duration_s))
+#     next_status_at = 0.0
+#     gps_disable_triggered = False
+#     gps_disable_at = (
+#         time.time() + float(disable_gps_after_takeoff_s)
+#         if float(disable_gps_after_takeoff_s) >= 0.0
+#         else None
+#     )
 
-    print(f"[*] Mission started: flying straight ahead at {forward_speed:.1f} m/s along current heading.")
+#     print(f"[*] Mission started: flying straight ahead at {forward_speed:.1f} m/s along current heading.")
 
-    while time.time() < mission_end:
-        _poll_health_messages(mav, gps_health)
-        now = time.time()
+#     while time.time() < mission_end:
+#         _poll_health_messages(mav, gps_health)
+#         now = time.time()
 
-        if gps_disable_at is not None and (not gps_disable_triggered) and now >= gps_disable_at:
-            print(f"[trigger] Disabling GPS at +{disable_gps_after_takeoff_s:.1f}s after takeoff")
-            trigger_disable_gps(mav)
-            gps_disable_triggered = True
+#         if gps_disable_at is not None and (not gps_disable_triggered) and now >= gps_disable_at:
+#             print(f"[trigger] Disabling GPS at +{disable_gps_after_takeoff_s:.1f}s after takeoff")
+#             trigger_disable_gps(mav)
+#             gps_disable_triggered = True
 
-        # Single forward velocity in body frame: +vx = straight ahead along the current
-        # heading. No yaw-rate and no attitude/angle targets are commanded. Optical flow,
-        # when enabled, adds only a lateral (vy) correction to counter wind drift.
-        cmd_vy = 0.0
-        flow_note = ""
-        if flow_forwarder is not None:
-            flow_ok, flow_age, flow_quality, flow_count = flow_forwarder.flow_health(
-                max_stale_s=float(flow_max_stale_s),
-                min_quality=int(flow_min_quality),
-            )
-            if flow_ok:
-                velocity = flow_forwarder.latest_flow_velocity_mps()
-                if velocity is not None:
-                    _, flow_vy = velocity
-                    raw_correction = -float(fallback_lateral_gain) * float(flow_vy)
-                    cmd_vy = max(-float(fallback_max_vy), min(float(fallback_max_vy), raw_correction))
-                flow_note = (
-                    f"flow=ok q={flow_quality} age={flow_age:.2f}s "
-                    f"msgs={flow_count} vy_cmd={cmd_vy:.2f}"
-                )
-            else:
-                flow_note = f"flow=bad q={flow_quality} age={flow_age:.2f}s msgs={flow_count}"
+#         # Single forward velocity in body frame: +vx = straight ahead along the current
+#         # heading. No yaw-rate and no attitude/angle targets are commanded. Optical flow,
+#         # when enabled, adds only a lateral (vy) correction to counter wind drift.
+#         cmd_vy = 0.0
+#         flow_note = ""
+#         if flow_forwarder is not None:
+#             flow_ok, flow_age, flow_quality, flow_count = flow_forwarder.flow_health(
+#                 max_stale_s=float(flow_max_stale_s),
+#                 min_quality=int(flow_min_quality),
+#             )
+#             if flow_ok:
+#                 velocity = flow_forwarder.latest_flow_velocity_mps()
+#                 if velocity is not None:
+#                     _, flow_vy = velocity
+#                     raw_correction = -float(fallback_lateral_gain) * float(flow_vy)
+#                     cmd_vy = max(-float(fallback_max_vy), min(float(fallback_max_vy), raw_correction))
+#                 flow_note = (
+#                     f"flow=ok q={flow_quality} age={flow_age:.2f}s "
+#                     f"msgs={flow_count} vy_cmd={cmd_vy:.2f}"
+#                 )
+#             else:
+#                 flow_note = f"flow=bad q={flow_quality} age={flow_age:.2f}s msgs={flow_count}"
 
-        send_velocity(mav, vx=forward_speed, vy=cmd_vy, vz=0.0, yaw=0.0, yaw_rate=0.0)
+#         send_velocity(mav, vx=forward_speed, vy=cmd_vy, vz=0.0, yaw=0.0, yaw_rate=0.0)
 
-        if now >= next_status_at:
-            print(
-                f"[status] gps_fix={gps_health.fix_type} sats={gps_health.satellites_visible} "
-                f"vx={forward_speed:.2f} vy={cmd_vy:.2f} {flow_note}"
-            )
-            next_status_at = now + 1.0
+#         if now >= next_status_at:
+#             print(
+#                 f"[status] gps_fix={gps_health.fix_type} sats={gps_health.satellites_visible} "
+#                 f"vx={forward_speed:.2f} vy={cmd_vy:.2f} {flow_note}"
+#             )
+#             next_status_at = now + 1.0
 
-        time.sleep(0.05)
+#         time.sleep(0.05)
 
-    land(mav)
-    print("[+] Mission complete")
+#     print("[+] Mission complete")
 
 
-def mission_cruise(mav, speed, altitude_m=10.0):
-    """Arm, take off, then hold ONE forward velocity forever (cruise control).
+def mission_cruise(mav, speed, altitude_m=10.0, guided_nogps=False):
+    """Arm, take off, then cruise straight forever.
 
-    Sends a single body-frame velocity: +vx = straight ahead along the current
-    heading. No vy, no yaw-rate, no attitude/angle targets, and no landing. Runs
-    until interrupted (Ctrl-C / SIGTERM).
+    Same mission either way; only the control path differs:
+      guided_nogps=False -> GUIDED, world-frame velocity setpoints due NORTH
+          (yaw=0; needs a horizontal position estimate from the EKF).
+      guided_nogps=True  -> GUIDED_NOGPS, attitude + thrust (works GPS-denied):
+          climb straight up holding the captured compass heading, then cruise on
+          an open-loop forward pitch along that heading; altitude is held on the
+          thrust (climb-rate) channel against baro.
+    Runs until interrupted (Ctrl-C / SIGTERM).
     """
     if not wait_for_ekf(mav, timeout=120):
         print("[~] Continuing despite EKF timeout (force arm path enabled)")
 
-    set_mode(mav, "GUIDED")
+    # GPS-denied prep: stream baro + compass, then (still on the ground, before
+    # arming) capture the ground pressure reference and the current nose heading
+    # so takeoff/cruise can climb on baro altitude while holding that heading.
+    ground_hpa = hold_yaw_deg = None
+    if guided_nogps:
+        request_message(mav, mavutil.mavlink.MAVLINK_MSG_ID_SCALED_PRESSURE, NOGPS_LOOP_HZ)
+        request_message(mav, mavutil.mavlink.MAVLINK_MSG_ID_VFR_HUD, NOGPS_LOOP_HZ)
+        time.sleep(1.0)
+        ground_hpa = capture_ground_pressure(mav)
+        hold_yaw_deg = wait_for_heading_deg(mav)
+
+    # Mode + takeoff differ: NAV_TAKEOFF needs a position estimate, so the
+    # GPS-denied path climbs on attitude instead.
+    set_mode(mav, "GUIDED_NOGPS" if guided_nogps else "GUIDED")
 
     if not arm(mav, force=True):
         return
 
-    takeoff(mav, altitude_m)
-
-    print(f"[*] Cruise control: holding {float(speed):.1f} m/s due NORTH, yaw=0. Ctrl-C to stop.")
+    if guided_nogps:
+        takeoff_nogps(mav, altitude_m, ground_hpa, hold_yaw_deg)
+        # Open-loop forward pitch (~1.7 deg per m/s, nose down); heading held.
+        pitch_cmd = -max(2.0, min(15.0, float(speed) * 1.7))
+        print(
+            f"[*] Cruise (GUIDED_NOGPS): pitch={pitch_cmd:.1f} deg fwd, "
+            f"yaw={hold_yaw_deg:.0f} deg held, baro alt-hold @ {float(altitude_m):.1f} m. "
+            f"Ctrl-C to stop."
+        )
+    else:
+        takeoff(mav, altitude_m)
+        print(f"[*] Cruise control: holding {float(speed):.1f} m/s due NORTH, yaw=0. Ctrl-C to stop.")
 
     north = east = down = 0.0
     heading_deg = 0.0
+    alt = float(altitude_m)
     next_status_at = 0.0
-
     while True:
-        # Drain the latest position + attitude telemetry without blocking the command rate.
-        while True:
-            msg = mav.recv_match(type=['LOCAL_POSITION_NED', 'ATTITUDE'], blocking=False)
-            if msg is None:
-                break
-            if msg.get_type() == 'LOCAL_POSITION_NED':
-                north, east, down = msg.x, msg.y, msg.z
-            else:  # ATTITUDE
-                heading_deg = (math.degrees(msg.yaw) + 360.0) % 360.0
-
-        # World-frame NED velocity due north (vx=north, vy=0) with a fixed heading of
-        # yaw=0 (north). Fixed axis + fixed yaw => only the N coordinate should change;
-        # E stays put with no wind, and drifts by exactly the wind's east component.
-        send_velocity(
-            mav,
-            vx=float(speed), vy=0.0, vz=0.0,
-            yaw=0.0, use_yaw=True,
-            frame=mavutil.mavlink.MAV_FRAME_LOCAL_NED,
-        )
-
-        now = time.time()
-        if now >= next_status_at:
-            print(
+        if guided_nogps:
+            press = read_pressure(mav)
+            if press is not None:
+                alt = pressure_to_alt(press, ground_hpa)
+            # Pitch forward only while altitude is in band; if we drift out, level
+            # off so all thrust recovers height (matches nogps fly_forward). Yaw is
+            # held at the captured heading, so the track stays straight.
+            in_band = abs(alt - float(altitude_m)) <= ALT_BAND
+            cmd_pitch = pitch_cmd if in_band else 0.0
+            thrust = alt_thrust(alt, float(altitude_m))
+            send_attitude(mav, pitch_deg=cmd_pitch, yaw_deg=hold_yaw_deg, thrust=thrust)
+            tag = "fwd " if in_band else "recov"
+            status = (f"[flying:{tag}] baro alt={alt:.1f} m  pitch={cmd_pitch:.1f}  "
+                      f"thrust={thrust:.2f}  yaw={hold_yaw_deg:.0f}")
+        else:
+            # Drain the latest position + attitude telemetry (also keeps reading
+            # the socket) without blocking the command rate.
+            while True:
+                msg = mav.recv_match(type=['LOCAL_POSITION_NED', 'ATTITUDE'], blocking=False)
+                if msg is None:
+                    break
+                if msg.get_type() == 'LOCAL_POSITION_NED':
+                    north, east, down = msg.x, msg.y, msg.z
+                else:  # ATTITUDE
+                    heading_deg = (math.degrees(msg.yaw) + 360.0) % 360.0
+            # World-frame NED velocity due north (vx=north, vy=0), fixed yaw=0.
+            send_velocity(
+                mav,
+                vx=float(speed), vy=0.0, vz=0.0,
+                yaw=0.0, use_yaw=True,
+                frame=mavutil.mavlink.MAV_FRAME_LOCAL_NED,
+            )
+            status = (
                 f"[flying] N={north:+.1f} E={east:+.1f} alt={-down:.1f} m | "
                 f"yaw={heading_deg:.1f} deg | vx_cmd={float(speed):.1f} m/s"
             )
-            next_status_at = now + 1.0
 
+        now = time.time()
+        if now >= next_status_at:
+            print(status)
+            next_status_at = now + 1.0
         time.sleep(0.05)
 
 
@@ -667,6 +841,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--altitude", type=float, default=10.0, help="Mission takeoff altitude in meters")
     parser.add_argument("--speed", type=float, default=3.0, help="Forward flight speed in m/s (body-frame vx, along heading)")
+    parser.add_argument(
+        "--guided_nogps",
+        action="store_true",
+        help="Fly the GPS-denied GUIDED_NOGPS attitude cruise instead of GUIDED velocity cruise",
+    )
     parser.add_argument(
         "--disable-gps-after-takeoff",
         type=float,
@@ -766,24 +945,12 @@ if __name__ == "__main__":
         flow_forwarder.start()
 
     try:
-        # EXAMPLE:
-        # mission_guided(
-        #     mav,
-        #     altitude_m=args.altitude,
-        #     radius=args.circle_radius,
-        #     speed=args.circle_speed,
-        #     duration_s=args.duration,
-        #     gps_loss_timeout_s=args.gps_loss_timeout,
-        #     fallback_speed=args.fallback_speed,
-        #     flow_forwarder=flow_forwarder,
-        #     flow_max_stale_s=args.flow_max_stale,
-        #     flow_min_quality=args.flow_min_quality,
-        #     fallback_lateral_gain=args.fallback_lateral_gain,
-        #     fallback_max_vy=args.fallback_max_vy,
-        #     disable_gps_after_takeoff_s=args.disable_gps_after_takeoff,
-        # )
-        # Endless straight-line cruise: one forward velocity, no landing.
-        mission_cruise(mav, speed=args.speed, altitude_m=args.altitude)
+        # Endless straight-line cruise. --guided_nogps flies it on
+        # attitude (GPS-denied); otherwise on GUIDED velocity.
+        mission_cruise(
+            mav, speed=args.speed, altitude_m=args.altitude,
+            guided_nogps=args.guided_nogps,
+        )
     finally:
         if flow_forwarder is not None:
             flow_forwarder.stop()

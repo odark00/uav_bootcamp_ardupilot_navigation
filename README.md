@@ -1,7 +1,8 @@
 # UAV Bootcamp ArduPilot Navigation
 
 Iris quadcopter in Gazebo + ArduPilot SITL, with a straight-line "cruise" flight,
-optical-flow lateral wind compensation, and a runtime-tunable Gazebo wind field.
+optical-flow lateral wind compensation, a runtime-tunable Gazebo wind field, and a
+GPS-denied (GUIDED_NOGPS) flight path.
 
 ---
 
@@ -62,10 +63,16 @@ docker exec -it uav_bootcamp_ardupilot_navigation-ardupilot-sitl-1 \
 | Flag | Default | Meaning |
 |------|---------|---------|
 | `--altitude M` | `10` | Takeoff altitude (m) |
-| `--speed M/S` | `3` | Northward cruise speed (m/s, world-NED, yaw held at 0) |
+| `--speed M/S` | `3` | Forward cruise speed (m/s, body-frame vx along heading, yaw held at 0) |
+| `--guided_nogps` | off | Fly the GPS-denied GUIDED_NOGPS attitude cruise instead of GUIDED velocity cruise (see [GPS-denied](#gps-denied-guided_nogps)) |
+| `--disable-gps-after-takeoff S` | `10` | Disable GPS this many seconds after takeoff (set `<0` to never disable) |
 | `--no-flow` | off | Don't launch the optical-flow estimator (pure straight flight) |
 | `--no-wind` | off | Zero the Gazebo wind at startup (WindEffects) — baseline / no-wind test |
 | `--wind VX VY VZ` | — | Set Gazebo wind (m/s, **world frame**) at startup, e.g. `--wind 8 8 0` |
+
+Optical-flow tuning flags (`--flow-min-quality`, `--flow-max-stale`, `--fallback-lateral-gain`,
+`--fallback-max-vy`, `--flow-topic`, `--flow-hfov`, `--flow-fps`, `--flow-sensor-id`,
+`--no-flow-display`) are also available — see `python control_drone_gazebo.py --help`.
 
 `--no-wind` and `--wind` tune the live sim over gz-transport — **no world rebuild needed**.
 If both are given, `--no-wind` wins.
@@ -84,6 +91,30 @@ python control_drone_gazebo.py --no-flow --wind 8 8 0 --altitude 10
 
 # With optical-flow lateral wind compensation enabled (drop --no-flow)
 python control_drone_gazebo.py --altitude 10
+```
+
+### GPS-denied (GUIDED_NOGPS)
+
+The same mission runs two ways; only the control path differs:
+
+- **default (GUIDED)** — world-frame velocity setpoints. Needs a horizontal position
+  estimate from the EKF (GPS, or optical flow fused into EKF3).
+- **`--guided_nogps` (GUIDED_NOGPS)** — attitude + thrust, works GPS-denied. Forward
+  motion is an open-loop pitch; altitude is held on the thrust (climb-rate) channel
+  against **baro**. `MAV_CMD_NAV_TAKEOFF` is unavailable here (it needs a horizontal
+  position estimate that baro + IMU cannot provide), so takeoff climbs on a level
+  attitude to a baro-altitude target instead.
+
+By default GPS is switched off `--disable-gps-after-takeoff` seconds (10 s) after takeoff,
+so you can watch the aircraft fly the rest of the mission GPS-denied. Pass a negative value
+to keep GPS on for the whole flight.
+
+```bash
+# GPS-denied cruise; GPS auto-disabled 10 s after takeoff
+python control_drone_gazebo.py --guided_nogps --altitude 10
+
+# GPS-denied, keep GPS on the whole flight
+python control_drone_gazebo.py --guided_nogps --disable-gps-after-takeoff -1 --altitude 10
 ```
 
 ---
