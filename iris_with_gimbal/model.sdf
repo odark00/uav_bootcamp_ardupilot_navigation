@@ -1,6 +1,10 @@
 <?xml version='1.0'?>
 <sdf version="1.9">
   <model name="iris_with_gimbal">
+    <!-- Model-level default: makes every link (incl. the merged iris_with_standoffs
+         base_link) respond to the world <wind> via the WindEffects system. A link
+         may still override this with its own <enable_wind>. -->
+    <enable_wind>true</enable_wind>
     <include merge="true">
       <uri>package://ardupilot_gazebo/models/iris_with_standoffs</uri>
       <name>iris</name>

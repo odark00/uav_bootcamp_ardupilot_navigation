@@ -5,6 +5,7 @@ Works with ArduPilot SITL, AirSim SITL, and real drones.
 
 import argparse
 from dataclasses import dataclass
+import math
 from pathlib import Path
 import re
 import subprocess
@@ -360,19 +361,38 @@ def land(mav):
 
 
 
-def send_velocity(mav, vx=0.0, vy=0.0, vz=0.0, yaw=0.0, yaw_rate=0.0):
+def send_velocity(
+    mav,
+    vx=0.0,
+    vy=0.0,
+    vz=0.0,
+    yaw=0.0,
+    yaw_rate=0.0,
+    frame=mavutil.mavlink.MAV_FRAME_BODY_NED,
+    use_yaw=False,
+):
     """
-    Send one velocity + yaw-rate command in body NED frame.
-    vx: forward (m/s)   vy: right (m/s)   vz: down (m/s, negative = climb)
-    yaw_rate: rad/s, positive = clockwise from above
-    Call at ~20 Hz for continuous motion.
+    Send one velocity setpoint. Call at ~20 Hz for continuous motion.
+
+    frame=MAV_FRAME_BODY_NED  (default): vx forward, vy right, vz down (body-relative).
+    frame=MAV_FRAME_LOCAL_NED:           vx north,   vy east,  vz down (world-fixed).
+    vz: m/s, negative = climb.
+
+    use_yaw=False (default): command yaw_rate (rad/s, +cw); heading is left free.
+    use_yaw=True:            command an absolute yaw angle (rad); yaw_rate ignored.
     """
+    if use_yaw:
+        # use velocity + absolute yaw; ignore position, accel, yaw_rate
+        type_mask = 0b100111000111
+    else:
+        # use velocity + yaw_rate; ignore position, accel, yaw angle
+        type_mask = 0b010111000111
     mav.mav.send(
         mavutil.mavlink.MAVLink_set_position_target_local_ned_message(
             0,
             mav.target_system, mav.target_component,
-            mavutil.mavlink.MAV_FRAME_BODY_NED,
-            0b010111000111,
+            frame,
+            type_mask,
             0, 0, 0,
             vx, vy, vz,
             0, 0, 0,
@@ -446,6 +466,55 @@ def trigger_disable_gps(mav) -> bool:
     return False
 
 
+def set_gz_wind(
+    vx: float,
+    vy: float,
+    vz: float = 0.0,
+    world_name: str = "map",
+    enable: bool = True,
+    attempts: int = 3,
+) -> bool:
+    """Set the Gazebo world wind at runtime via the WindEffects system.
+
+    The wind comes from the world <wind> element applied by the WindEffects system
+    (gz-sim-wind-effects-system), not from ArduPilot SITL, so ArduPilot params can't
+    change it. Instead we publish a gz.msgs.Wind to /world/<world>/wind, which the
+    WindEffects plugin adopts as the new wind seed velocity (world frame, m/s). This
+    tunes wind live, no world-SDF rebuild needed.
+
+    Must run in the same container as the gz server so gz-transport can reach it. The
+    publish is retried a few times because the first message can be dropped while
+    transport discovery settles.
+
+    enable=False also flips the WindEffects enable_wind flag off (used by --no-wind).
+    Returns True once a publish succeeds.
+    """
+    topic = f"/world/{world_name}/wind"
+    payload = (
+        f"linear_velocity: {{x: {float(vx)}, y: {float(vy)}, z: {float(vz)}}}, "
+        f"enable_wind: {'true' if enable else 'false'}"
+    )
+    cmd = ["gz", "topic", "-t", topic, "-m", "gz.msgs.Wind", "-p", payload]
+    print(f"[*] Setting Gazebo wind on {topic}: ({vx:g}, {vy:g}, {vz:g}) m/s enable={enable}")
+    for i in range(max(1, int(attempts))):
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        except FileNotFoundError:
+            print("[!] 'gz' CLI not found - cannot set wind from this process")
+            return False
+        except subprocess.TimeoutExpired:
+            print("[!] Timed out publishing wind")
+            return False
+        if result.returncode == 0:
+            print(f"[+] Gazebo wind set to ({vx:g}, {vy:g}, {vz:g}) m/s")
+            return True
+        if i == 0:
+            print(f"[~] gz topic returned {result.returncode}: {result.stderr.strip()} (retrying)")
+        time.sleep(0.3)
+    print("[!] Failed to set Gazebo wind (is the WindEffects system running and world name correct?)")
+    return False
+
+
 def _poll_health_messages(mav, gps_health: GpsHealth) -> None:
     while True:
         msg = mav.recv_match(type=['GPS_RAW_INT'], blocking=False)
@@ -458,11 +527,8 @@ def _poll_health_messages(mav, gps_health: GpsHealth) -> None:
 def mission_guided(
     mav,
     altitude_m=10.0,
-    radius=25.0,
     speed=3.0,
     duration_s=120.0,
-    gps_loss_timeout_s=1.5,
-    fallback_speed=2.0,
     flow_forwarder: OpticalFlowForwarder | None = None,
     flow_max_stale_s=1.5,
     flow_min_quality=30,
@@ -480,9 +546,8 @@ def mission_guided(
 
     takeoff(mav, altitude_m)
 
-    yaw_rate = speed / max(0.5, radius)
+    forward_speed = float(speed)
     gps_health = GpsHealth()
-    mode = "CIRCLE_GPS"
     mission_end = time.time() + max(1.0, float(duration_s))
     next_status_at = 0.0
     gps_disable_triggered = False
@@ -492,10 +557,7 @@ def mission_guided(
         else None
     )
 
-    print(
-        "[*] Mission started: GPS circle mode. "
-        "If GPS is lost, switching to straight-forward vision-assisted mode."
-    )
+    print(f"[*] Mission started: flying straight ahead at {forward_speed:.1f} m/s along current heading.")
 
     while time.time() < mission_end:
         _poll_health_messages(mav, gps_health)
@@ -506,48 +568,35 @@ def mission_guided(
             trigger_disable_gps(mav)
             gps_disable_triggered = True
 
-        gps_ok = gps_health.is_healthy(now, max_stale_s=max(0.2, float(gps_loss_timeout_s)))
-        target_mode = "CIRCLE_GPS" if gps_ok else "STRAIGHT_VISION"
-
-        if target_mode != mode:
-            mode = target_mode
-            print(f"[mode] Switched to {mode}")
-
-        if mode == "CIRCLE_GPS":
-            cmd_vx = float(speed)
-            cmd_vy = 0.0
-            cmd_yaw_rate = yaw_rate
-            flow_note = ""
-        else:
-            cmd_vx = float(fallback_speed)
-            cmd_vy = 0.0
-            cmd_yaw_rate = 0.0
-            flow_note = "flow=unavailable"
-
-            if flow_forwarder is not None:
-                flow_ok, flow_age, flow_quality, flow_count = flow_forwarder.flow_health(
-                    max_stale_s=float(flow_max_stale_s),
-                    min_quality=int(flow_min_quality),
+        # Single forward velocity in body frame: +vx = straight ahead along the current
+        # heading. No yaw-rate and no attitude/angle targets are commanded. Optical flow,
+        # when enabled, adds only a lateral (vy) correction to counter wind drift.
+        cmd_vy = 0.0
+        flow_note = ""
+        if flow_forwarder is not None:
+            flow_ok, flow_age, flow_quality, flow_count = flow_forwarder.flow_health(
+                max_stale_s=float(flow_max_stale_s),
+                min_quality=int(flow_min_quality),
+            )
+            if flow_ok:
+                velocity = flow_forwarder.latest_flow_velocity_mps()
+                if velocity is not None:
+                    _, flow_vy = velocity
+                    raw_correction = -float(fallback_lateral_gain) * float(flow_vy)
+                    cmd_vy = max(-float(fallback_max_vy), min(float(fallback_max_vy), raw_correction))
+                flow_note = (
+                    f"flow=ok q={flow_quality} age={flow_age:.2f}s "
+                    f"msgs={flow_count} vy_cmd={cmd_vy:.2f}"
                 )
-                if flow_ok:
-                    velocity = flow_forwarder.latest_flow_velocity_mps()
-                    if velocity is not None:
-                        _, flow_vy = velocity
-                        raw_correction = -float(fallback_lateral_gain) * float(flow_vy)
-                        cmd_vy = max(-float(fallback_max_vy), min(float(fallback_max_vy), raw_correction))
-                    flow_note = (
-                        f"flow=ok q={flow_quality} age={flow_age:.2f}s "
-                        f"msgs={flow_count} vy_cmd={cmd_vy:.2f}"
-                    )
-                else:
-                    flow_note = f"flow=bad q={flow_quality} age={flow_age:.2f}s msgs={flow_count}"
+            else:
+                flow_note = f"flow=bad q={flow_quality} age={flow_age:.2f}s msgs={flow_count}"
 
-        send_velocity(mav, vx=cmd_vx, vy=cmd_vy, vz=0.0, yaw=0.0, yaw_rate=cmd_yaw_rate)
+        send_velocity(mav, vx=forward_speed, vy=cmd_vy, vz=0.0, yaw=0.0, yaw_rate=0.0)
 
         if now >= next_status_at:
             print(
-                f"[status] mode={mode} gps_fix={gps_health.fix_type} sats={gps_health.satellites_visible} "
-                f"vx={cmd_vx:.2f} vy={cmd_vy:.2f} yaw_rate={cmd_yaw_rate:.3f} {flow_note}"
+                f"[status] gps_fix={gps_health.fix_type} sats={gps_health.satellites_visible} "
+                f"vx={forward_speed:.2f} vy={cmd_vy:.2f} {flow_note}"
             )
             next_status_at = now + 1.0
 
@@ -557,31 +606,72 @@ def mission_guided(
     print("[+] Mission complete")
 
 
+def mission_cruise(mav, speed, altitude_m=10.0):
+    """Arm, take off, then hold ONE forward velocity forever (cruise control).
+
+    Sends a single body-frame velocity: +vx = straight ahead along the current
+    heading. No vy, no yaw-rate, no attitude/angle targets, and no landing. Runs
+    until interrupted (Ctrl-C / SIGTERM).
+    """
+    if not wait_for_ekf(mav, timeout=120):
+        print("[~] Continuing despite EKF timeout (force arm path enabled)")
+
+    set_mode(mav, "GUIDED")
+
+    if not arm(mav, force=True):
+        return
+
+    takeoff(mav, altitude_m)
+
+    print(f"[*] Cruise control: holding {float(speed):.1f} m/s due NORTH, yaw=0. Ctrl-C to stop.")
+
+    north = east = down = 0.0
+    heading_deg = 0.0
+    next_status_at = 0.0
+
+    while True:
+        # Drain the latest position + attitude telemetry without blocking the command rate.
+        while True:
+            msg = mav.recv_match(type=['LOCAL_POSITION_NED', 'ATTITUDE'], blocking=False)
+            if msg is None:
+                break
+            if msg.get_type() == 'LOCAL_POSITION_NED':
+                north, east, down = msg.x, msg.y, msg.z
+            else:  # ATTITUDE
+                heading_deg = (math.degrees(msg.yaw) + 360.0) % 360.0
+
+        # World-frame NED velocity due north (vx=north, vy=0) with a fixed heading of
+        # yaw=0 (north). Fixed axis + fixed yaw => only the N coordinate should change;
+        # E stays put with no wind, and drifts by exactly the wind's east component.
+        send_velocity(
+            mav,
+            vx=float(speed), vy=0.0, vz=0.0,
+            yaw=0.0, use_yaw=True,
+            frame=mavutil.mavlink.MAV_FRAME_LOCAL_NED,
+        )
+
+        now = time.time()
+        if now >= next_status_at:
+            print(
+                f"[flying] N={north:+.1f} E={east:+.1f} alt={-down:.1f} m | "
+                f"yaw={heading_deg:.1f} deg | vx_cmd={float(speed):.1f} m/s"
+            )
+            next_status_at = now + 1.0
+
+        time.sleep(0.05)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run guided mission with optional optical-flow display (no SITL forwarding)."
     )
     parser.add_argument("--altitude", type=float, default=10.0, help="Mission takeoff altitude in meters")
-    parser.add_argument("--duration", type=float, default=120.0, help="Mission duration in seconds")
-    parser.add_argument("--circle-radius", type=float, default=25.0, help="GPS-mode circle radius in meters")
-    parser.add_argument("--circle-speed", type=float, default=3.0, help="GPS-mode circle forward speed in m/s")
-    parser.add_argument(
-        "--gps-loss-timeout",
-        type=float,
-        default=1.5,
-        help="Switch to fallback if GPS_RAW_INT is stale or degraded longer than this (seconds)",
-    )
+    parser.add_argument("--speed", type=float, default=3.0, help="Forward flight speed in m/s (body-frame vx, along heading)")
     parser.add_argument(
         "--disable-gps-after-takeoff",
         type=float,
         default=10.0,
         help="Disable GPS this many seconds after takeoff (set <0 to disable trigger)",
-    )
-    parser.add_argument(
-        "--fallback-speed",
-        type=float,
-        default=2.0,
-        help="Straight-forward speed in fallback mode (m/s)",
     )
     parser.add_argument(
         "--flow-min-quality",
@@ -599,13 +689,13 @@ def parse_args() -> argparse.Namespace:
         "--fallback-lateral-gain",
         type=float,
         default=1.0,
-        help="Gain from flow lateral velocity estimate to fallback vy correction",
+        help="Gain from flow lateral velocity estimate to vy (lateral) correction",
     )
     parser.add_argument(
         "--fallback-max-vy",
         type=float,
         default=1.5,
-        help="Clamp for lateral correction in fallback mode (m/s)",
+        help="Clamp for lateral (vy) wind correction in m/s",
     )
     parser.add_argument(
         "--flow-topic",
@@ -636,11 +726,30 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Disable optical flow process launch/forwarding",
     )
+    parser.add_argument(
+        "--no-wind",
+        action="store_true",
+        help="Zero the Gazebo world wind at startup (via WindEffects) for testing",
+    )
+    parser.add_argument(
+        "--wind",
+        type=float,
+        nargs=3,
+        metavar=("VX", "VY", "VZ"),
+        default=None,
+        help="Set Gazebo world wind (m/s, world frame) at startup, e.g. --wind 8 8 0",
+    )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
+
+    if args.no_wind:
+        set_gz_wind(0.0, 0.0, 0.0, enable=False)
+    elif args.wind is not None:
+        set_gz_wind(args.wind[0], args.wind[1], args.wind[2])
+
     mav = init_connections()
 
     flow_forwarder: OpticalFlowForwarder | None = None
@@ -657,21 +766,24 @@ if __name__ == "__main__":
         flow_forwarder.start()
 
     try:
-        mission_guided(
-            mav,
-            altitude_m=args.altitude,
-            radius=args.circle_radius,
-            speed=args.circle_speed,
-            duration_s=args.duration,
-            gps_loss_timeout_s=args.gps_loss_timeout,
-            fallback_speed=args.fallback_speed,
-            flow_forwarder=flow_forwarder,
-            flow_max_stale_s=args.flow_max_stale,
-            flow_min_quality=args.flow_min_quality,
-            fallback_lateral_gain=args.fallback_lateral_gain,
-            fallback_max_vy=args.fallback_max_vy,
-            disable_gps_after_takeoff_s=args.disable_gps_after_takeoff,
-        )
+        # EXAMPLE:
+        # mission_guided(
+        #     mav,
+        #     altitude_m=args.altitude,
+        #     radius=args.circle_radius,
+        #     speed=args.circle_speed,
+        #     duration_s=args.duration,
+        #     gps_loss_timeout_s=args.gps_loss_timeout,
+        #     fallback_speed=args.fallback_speed,
+        #     flow_forwarder=flow_forwarder,
+        #     flow_max_stale_s=args.flow_max_stale,
+        #     flow_min_quality=args.flow_min_quality,
+        #     fallback_lateral_gain=args.fallback_lateral_gain,
+        #     fallback_max_vy=args.fallback_max_vy,
+        #     disable_gps_after_takeoff_s=args.disable_gps_after_takeoff,
+        # )
+        # Endless straight-line cruise: one forward velocity, no landing.
+        mission_cruise(mav, speed=args.speed, altitude_m=args.altitude)
     finally:
         if flow_forwarder is not None:
             flow_forwarder.stop()

@@ -6,12 +6,24 @@
       <real_time_factor>1.0</real_time_factor>
     </physics>
 
+    <!-- No static wind. This element only creates the world wind component so it
+         can be driven at runtime over the topic; e.g. a 45deg ~28.3 m/s crosswind:
+           gz topic -t /world/map/wind -m gz.msgs.Wind \
+             -p 'linear_velocity: {x: 20, y: 20, z: 0}, enable_wind: true' -->
     <wind>
-      <linear_velocity>8.242640687 8.242640687 0</linear_velocity>
+      <linear_velocity>0 0 0</linear_velocity>
     </wind>
 
     <plugin filename="gz-sim-physics-system"
       name="gz::sim::systems::Physics">
+    </plugin>
+    <!-- Applies the world <wind> velocity as an aerodynamic force on every link
+         that has <enable_wind>true</enable_wind>. Without this system the <wind>
+         value is inert. force_approximation_scaling_factor scales the force
+         (raise it to exaggerate the effect for testing). -->
+    <plugin filename="gz-sim-wind-effects-system"
+      name="gz::sim::systems::WindEffects">
+      <force_approximation_scaling_factor>1.0</force_approximation_scaling_factor>
     </plugin>
     <plugin
       filename="gz-sim-sensors-system"
