@@ -28,7 +28,8 @@ instance:=0
 defaults:=$(ros2 pkg prefix ardupilot_sitl)
           /share/ardupilot_sitl/config/default_params/gazebo-iris.parm,
           $(ros2 pkg prefix ardupilot_sitl)
-          /share/ardupilot_sitl/config/default_params/dds_udp.parm
+          /share/ardupilot_sitl/config/default_params/dds_udp.parm,
+          /root/ardu_ws/no_gps_flow.param
 sim_address:=127.0.0.1
 master:=tcp:127.0.0.1:5760
 sitl:=127.0.0.1:5501
@@ -256,7 +257,9 @@ def generate_launch_description():
                 "config",
                 "default_params",
                 "dds_udp.parm",
-            ),
+            )
+            + ","
+            + ("/root/ardu_ws/no_gps_flow.param"),
             "sim_address": "127.0.0.1",
             "master": "tcp:127.0.0.1:5760",
             "sitl": "127.0.0.1:5501",

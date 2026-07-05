@@ -1,10 +1,11 @@
 FROM robocin/ardupilot-sitl-gazebo:latest
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3-pip \
+    python3-pip nano \
     && pip3 install MAVProxy pymavlink \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+COPY ./no_gps_flow.param /root/ardu_ws/no_gps_flow.param
 COPY ./control_drone_gazebo.py /root/ardu_ws/control_drone_gazebo.py
 COPY ./nogps_control_drone_gazebo.py /root/ardu_ws/nogps_control_drone_gazebo.py
 COPY ./ardupilot_gz_gazebo /root/ardu_ws/src/ardupilot_gz/ardupilot_gz_gazebo
@@ -12,6 +13,9 @@ COPY ./ardupilot_gz_bringup /root/ardu_ws/src/ardupilot_gz/ardupilot_gz_bringup
 COPY ./iris_with_gimbal /root/ardu_ws/src/ardupilot_gz/ardupilot_gz_description/models/iris_with_gimbal
 COPY ./aerial_ground /root/ardu_ws/src/ardupilot_gz/ardupilot_gz_description/models/aerial_ground
 COPY ./optical_flow /root/ardu_ws/optical_flow
+
+COPY ./load_params.sh /root/ardu_ws/load_params.sh
+RUN bash -c "chmod +x /root/ardu_ws/load_params.sh"
 
 # Make the copied models resolvable. The world uses model://iris_with_gimbal and
 # model://aerial_ground (incl. its albedo texture); those resolve only if the

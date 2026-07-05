@@ -1,0 +1,46 @@
+# --- EKF and AHRS ---
+EK2_ENABLE,0
+EK3_ENABLE,1
+AHRS_EKF_TYPE,3
+AHRS_OPTIONS,24
+
+# --- GPS disabled ---
+EK3_GPS_TYPE,3
+SIM_GPS_TYPE,0
+EK3_GPS_CHECK,0
+AHRS_GPS_USE,0
+AHRS_GPS_GAIN,0.0
+AHRS_GPS_MINSATS,0
+
+# --- Visual odometry (external nav over MAVLink) ---
+# VISO_TYPE=1: MAVLink visual-odometry backend, fed by VISION_POSITION_ESTIMATE
+# messages the script injects. Gives the EKF horizontal position directly - no
+# GPS, no rangefinder, no optical flow needed.
+# NOTE: VISO_TYPE only takes effect after an autopilot REBOOT.
+VISO_TYPE,1
+
+# --- EKF sources (external-nav horizontal position, baro/compass otherwise) ---
+# POSXY=6: horizontal position from ExternalNav (visual odometry) -> satisfies
+#          GUIDED's "requires position" without GPS.
+# VELXY=0: no separate velocity source; EKF derives velocity from position+IMU.
+EK3_SRC1_POSXY,6
+EK3_SRC1_VELXY,0
+EK3_SRC1_POSZ,1
+EK3_SRC1_VELZ,0
+EK3_SRC1_YAW,1
+
+
+# --- Misc safety ---
+GPS_AUTO_CONFIG,0
+GPS_AUTO_SWITCH,0
+GPS_BLEND_MASK,0
+GPS_DRV_OPTIONS,0
+GPS_HDOP_GOOD,999
+GPS_MIN_ELEV,-100
+GPS_NAVFILTER,0
+GPS_PRIMARY,0
+GPS_RAW_DATA,0
+GPS_SAVE_CFG,0
+GPS_SBAS_MODE,0
+GPS_SBP_LOGMASK,0
+SIM_GPS_LOG_NUM,0
