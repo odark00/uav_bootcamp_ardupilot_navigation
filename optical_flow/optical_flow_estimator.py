@@ -3,13 +3,16 @@ import math
 import sys
 from collections import deque
 from dataclasses import dataclass
+import rclpy
+from rclpy.node import Node
+from std_msgs.msg import String
 
 import cv2
 import numpy as np
 
-from estimators.lk_estimator import LucasKanadeEstimator
-from estimators.yaw_robust_estimator import YawRobustEstimator
-from estimators.motion_estimator import MotionEstimate, MotionEstimator
+from optical_flow.estimators.lk_estimator import LucasKanadeEstimator
+from optical_flow.estimators.yaw_robust_estimator import YawRobustEstimator
+from optical_flow.estimators.motion_estimator import MotionEstimate, MotionEstimator
 
 try:
 	from optical_flow.video_providers.base_video_provider import VideoProvider
@@ -120,6 +123,33 @@ class StreamingReporter:
 			f"ground_distance={flow.ground_distance:.3f}",
 			flush=True,
 		)
+		
+
+	@staticmethod
+	def print_warning(frame_idx: int, reason: str) -> None:
+		print(f"frame={frame_idx:06d} warning={reason}", flush=True)
+
+
+class MavLinkReporter(Node):
+	def __init__(self, connection_string: str = "udpout:localhost:14550") -> None:
+		rclpy.init()
+		super().__init__("mavlink_reporter")
+		self.publisher = self.create_publisher(String, '/optical_flow', 10)
+
+	def maybe_print_optical_flow(self, frame_idx: int, flow: MavlinkOpticalFlow) -> None:
+		# Invert dx and dy to match the expected coordinate system for optical flow
+		res_dx_px = -flow.flow_comp_m_y * 10
+		res_dy_px = -flow.flow_comp_m_x * 10
+		msg = String()
+		msg.data = (
+            f"time_usec={flow.time_usec} sensor_id={flow.sensor_id} "
+            f"flow_x={flow.flow_x} flow_y={flow.flow_y} "
+            f"flow_comp_m_x={res_dx_px:.5f} flow_comp_m_y={res_dy_px:.5f} "
+            f"quality={flow.quality} ground_distance={flow.ground_distance:.3f}"
+        )
+		self.publisher.publish(msg)
+		print("Published OF message")
+		
 
 	@staticmethod
 	def print_warning(frame_idx: int, reason: str) -> None:
@@ -209,6 +239,87 @@ class VideoMotionDisplay:
 			self.is_open = False
 
 
+class OpticalFlowFacade:
+	def __init__(self, report_every = 1, smoothing_window = 5, ros_image_topic: str = "camera/image", hfov: float = 115.0, width: int = 640) -> None:
+		self.report_every = max(1, report_every)
+		self.smoothing_window = max(1, smoothing_window)
+		self.hfov = hfov
+		self.width = width
+		self.provider: VideoProvider | None = ModuleNotFoundError
+		self.estimator: MotionEstimator | None = create_estimator('yaw_robust')
+		self.smoother: RollingVelocitySmoother | None = RollingVelocitySmoother(self.smoothing_window)
+		self.reporter: MavLinkReporter | None = MavLinkReporter()
+		self.flow_composer: MavlinkOpticalFlowComposer | None = MavlinkOpticalFlowComposer(sensor_id=0)
+		self.display: VideoMotionDisplay | None = VideoMotionDisplay(arrow_scale_px_per_mps=40.0)
+		self.invalid_frames = 0
+
+		try:
+			from optical_flow.video_providers.ros_image_topic_provider import RosImageTopicVideoProvider
+		except ModuleNotFoundError:
+			from video_providers.ros_image_topic_provider import RosImageTopicVideoProvider
+
+		self.provider = RosImageTopicVideoProvider(
+			topic=ros_image_topic,
+			frame_timeout_s=1.0,
+			fallback_fps=30,
+		)
+
+	def process_frame(
+			self,
+			frame_idx: int,
+			frame: np.ndarray,
+			fps: float,
+			altitude_m: float,
+		) -> MavlinkOpticalFlow:
+		gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+		estimate = self.estimator.process(gray)
+		mpp = meters_per_pixel(altitude_m, self.hfov, self.width)
+
+		if estimate.valid:
+			vx = - estimate.dx_px * mpp * fps
+			vy = - estimate.dy_px * mpp * fps
+			speed = math.hypot(vx, vy)
+			smooth_vx, smooth_vy, smooth_speed = self.smoother.update(vx, vy, speed)
+
+			flow_msg = self.flow_composer.compose(
+				frame_idx=frame_idx,
+				fps=fps,
+				estimate=estimate,
+				meters_per_pixel_scale=mpp,
+				ground_distance_m=altitude_m,
+			)
+			self.reporter.maybe_print_optical_flow(frame_idx, flow_msg)
+
+			if self.display is not None:
+				_ = not self.display.show(
+					frame,
+					smooth_vx,
+					smooth_vy,
+					smooth_speed,
+					estimate.confidence,
+					frame_idx,
+				)
+			return flow_msg
+		else:
+			if estimate.note and frame_idx % max(10, self.report_every) == 0:
+				self.reporter.print_warning(frame_idx, estimate.note)
+
+			if self.display is not None:
+				_ = not self.display.show(
+					frame,
+					None,
+					None,
+					None,
+					estimate.confidence,
+					frame_idx,
+					estimate.note,
+				)
+			return None
+
+		# if stop_requested:
+		# 	print("Display closed by user.", flush=True)
+
+
 def create_video_provider(args: argparse.Namespace) -> VideoProvider:
 	source_count = int(bool(args.video))
 	source_count += int(bool(args.bmp_folder))
@@ -296,7 +407,7 @@ def parse_args() -> argparse.Namespace:
 	)
 	parser.add_argument("video", nargs="?", default=None, help="Path to input video file (omit when using --bmp-folder)")
 	parser.add_argument("--altitude", type=float, required=True, help="Drone altitude above ground in meters")
-	parser.add_argument("--hfov", type=float, default=84.0, help="Horizontal FOV in degrees (default: 84)")
+	parser.add_argument("--hfov", type=float, default=115.0, help="Horizontal FOV in degrees (default: 115)")
 	parser.add_argument("--fps", type=float, default=0.0, help="FPS override (default: use video metadata)")
 	parser.add_argument("--estimator", default="lk", help="Motion estimator backend (default: lk)")
 	parser.add_argument(
@@ -366,6 +477,16 @@ def parse_args() -> argparse.Namespace:
 	return parser.parse_args()
 
 
+def create_optical_flow_facade():
+	return OpticalFlowFacade(
+		report_every=1,
+		smoothing_window=5,
+		ros_image_topic="camera/image",
+		hfov=115.0,
+		width=640
+	)
+
+
 def main() -> int:
 	if hasattr(sys.stdout, "reconfigure"):
 		sys.stdout.reconfigure(line_buffering=True)
@@ -379,128 +500,25 @@ def main() -> int:
 		print("Error: --hfov must be in (0, 179)", file=sys.stderr)
 		return 2
 
-	try:
-		provider = create_video_provider(args)
-	except ValueError as exc:
-		print(f"Error: {exc}", file=sys.stderr)
-		return 2
-
-	width = provider.frame_width()
-	if width <= 0:
-		print("Error: invalid frame width in video metadata", file=sys.stderr)
-		provider.release()
-		return 2
-
-	fps_meta = provider.fps()
-	fps = args.fps if args.fps > 0 else fps_meta
-	if fps <= 0:
-		print("Error: FPS unavailable. Provide --fps explicitly", file=sys.stderr)
-		provider.release()
-		return 2
-
-	try:
-		estimator = create_estimator(args.estimator)
-	except ValueError as exc:
-		print(f"Error: {exc}", file=sys.stderr)
-		provider.release()
-		return 2
-
-	mpp = meters_per_pixel(args.altitude, args.hfov, width)
-	smoother = RollingVelocitySmoother(args.smoothing_window)
-	reporter = StreamingReporter(args.report_every)
-	flow_composer = MavlinkOpticalFlowComposer(sensor_id=args.sensor_id)
-	display = VideoMotionDisplay(arrow_scale_px_per_mps=args.arrow_scale) if args.display else None
 
 	frame_idx = 0
-	valid_frames = 0
-	invalid_frames = 0
-	sum_vx = 0.0
-	sum_vy = 0.0
-	sum_speed = 0.0
-	stop_requested = False
+
+	facade = create_optical_flow_facade()
 
 	print("Starting processing...", flush=True)
 
 	while True:
-		ok, frame = provider.read()
+		ok, frame = facade.provider.read()
 		if not ok:
 			break
 
-		gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-		estimate = estimator.process(gray)
-
-		if estimate.valid:
-			vx = - estimate.dx_px * mpp * fps
-			vy = - estimate.dy_px * mpp * fps
-			speed = math.hypot(vx, vy)
-			smooth_vx, smooth_vy, smooth_speed = smoother.update(vx, vy, speed)
-
-			valid_frames += 1
-			sum_vx += smooth_vx
-			sum_vy += smooth_vy
-			sum_speed += smooth_speed
-
-			flow_msg = flow_composer.compose(
-				frame_idx=frame_idx,
-				fps=fps,
-				estimate=estimate,
-				meters_per_pixel_scale=mpp,
-				ground_distance_m=args.altitude,
-			)
-			reporter.maybe_print_optical_flow(frame_idx, flow_msg)
-
-			if display is not None:
-				stop_requested = not display.show(
-					frame,
-					smooth_vx,
-					smooth_vy,
-					smooth_speed,
-					estimate.confidence,
-					frame_idx,
-				)
-		else:
-			invalid_frames += 1
-			if estimate.note and frame_idx % max(10, args.report_every) == 0:
-				reporter.print_warning(frame_idx, estimate.note)
-
-			if display is not None:
-				stop_requested = not display.show(
-					frame,
-					None,
-					None,
-					None,
-					estimate.confidence,
-					frame_idx,
-					estimate.note,
-				)
-
-		frame_idx += 1
-		if stop_requested:
-			print("Display closed by user.", flush=True)
-			break
-
-	provider.release()
-	if display is not None:
-		display.close()
-
-	print("\nFinal summary:")
-	print(f"  Processed frames: {frame_idx}")
-	print(f"  Valid motion frames: {valid_frames}")
-	print(f"  Invalid/warmup frames: {invalid_frames}")
-
-	if valid_frames == 0:
-		print("  No valid motion estimates were produced.")
-		return 1
-
-	avg_vx = sum_vx / valid_frames
-	avg_vy = sum_vy / valid_frames
-	avg_speed = sum_speed / valid_frames
-
-	print(f"  Average X speed: {avg_vx:.3f} m/s")
-	print(f"  Average Y speed: {avg_vy:.3f} m/s")
-	print(f"  Average speed magnitude: {avg_speed:.3f} m/s")
-	print(f"  Effective FPS used: {fps:.3f}")
-	print(f"  Meters per pixel: {mpp:.6f}")
+		msg = facade.process_frame(
+			frame_idx=frame_idx,
+			frame=frame,
+			fps=30.0,
+			altitude_m=args.altitude,
+		)
+		print(f"[optical_flow_estimator] frame={frame_idx} msg={msg}")
 
 	return 0
 

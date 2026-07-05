@@ -1,6 +1,6 @@
 import cv2
 
-from estimators.motion_estimator import MotionEstimate, MotionEstimator
+from optical_flow.estimators.motion_estimator import MotionEstimate, MotionEstimator
 import numpy as np
 
 
