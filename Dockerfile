@@ -11,6 +11,15 @@ COPY ./ardupilot_gz_gazebo /root/ardu_ws/src/ardupilot_gz/ardupilot_gz_gazebo
 COPY ./ardupilot_gz_bringup /root/ardu_ws/src/ardupilot_gz/ardupilot_gz_bringup
 COPY ./iris_with_gimbal /root/ardu_ws/src/ardupilot_gz/ardupilot_gz_description/models/iris_with_gimbal
 COPY ./aerial_ground /root/ardu_ws/src/ardupilot_gz/ardupilot_gz_description/models/aerial_ground
+COPY ./optical_flow /root/ardu_ws/optical_flow
+
+# Make the copied models resolvable. The world uses model://iris_with_gimbal and
+# model://aerial_ground (incl. its albedo texture); those resolve only if the
+# models' parent dir is on GZ_SIM_RESOURCE_PATH. No hook in this repo adds it
+# (ardupilot_gz_gazebo only exports worlds/), so point at the source dir we just
+# COPYed into — guaranteed present regardless of colcon install rules. Sourcing
+# install/setup.bash at runtime prepends the package paths, keeping this as base.
+ENV GZ_SIM_RESOURCE_PATH=/root/ardu_ws/src/ardupilot_gz/ardupilot_gz_description/models
 
 RUN bash -c "source /opt/ros/humble/setup.bash && \
                 colcon build --packages-select \
@@ -19,3 +28,5 @@ RUN bash -c "source /opt/ros/humble/setup.bash && \
                 ardupilot_gz_gazebo \
                 ardupilot_gz_application \
                 ardupilot_sitl_models"
+
+RUN echo "source /root/ardu_ws/install/setup.bash" >> /root/.bashrc

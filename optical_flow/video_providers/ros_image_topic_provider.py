@@ -22,62 +22,71 @@ except ImportError:
 	from base_video_provider import VideoProvider
 
 
-class _ImageSubscriberNode(Node):
-	def __init__(self, topic: str) -> None:
-		super().__init__("optical_flow_image_subscriber")
-		self._bridge = CvBridge()
-		self._frames: deque[np.ndarray] = deque(maxlen=1)
-		self._width = 0
-		self._height = 0
-		self._first_frame_received = False
-		self._last_stamp: float | None = None
-		self._fps_estimate: float = 0.0
+if Node is not None and CvBridge is not None and Image is not None:
+	class _ImageSubscriberNode(Node):
+		def __init__(self, topic: str) -> None:
+			super().__init__("optical_flow_image_subscriber")
+			self._bridge = CvBridge()
+			self._frames: deque[np.ndarray] = deque(maxlen=1)
+			self._width = 0
+			self._height = 0
+			self._first_frame_received = False
+			self._last_stamp: float | None = None
+			self._fps_estimate: float = 0.0
 
-		self.create_subscription(Image, topic, self._on_image, 10)
+			self.create_subscription(Image, topic, self._on_image, 10)
 
-	def _on_image(self, msg: Image) -> None:
-		frame = self._bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
-		self._frames.append(frame)
-		self._width = int(msg.width)
-		self._height = int(msg.height)
-		self._first_frame_received = True
+		def _on_image(self, msg) -> None:
+			frame = self._bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
+			self._frames.append(frame)
+			self._width = int(msg.width)
+			self._height = int(msg.height)
+			self._first_frame_received = True
 
-		stamp_sec = float(msg.header.stamp.sec) + float(msg.header.stamp.nanosec) * 1e-9
-		if self._last_stamp is not None:
-			dt = stamp_sec - self._last_stamp
-			if dt > 1e-6:
-				instant_fps = 1.0 / dt
-				if self._fps_estimate <= 0.0:
-					self._fps_estimate = instant_fps
-				else:
-					# Smooth jittery image timestamp deltas.
-					self._fps_estimate = 0.9 * self._fps_estimate + 0.1 * instant_fps
-		self._last_stamp = stamp_sec
+			stamp_sec = float(msg.header.stamp.sec) + float(msg.header.stamp.nanosec) * 1e-9
+			if self._last_stamp is not None:
+				dt = stamp_sec - self._last_stamp
+				if dt > 1e-6:
+					instant_fps = 1.0 / dt
+					if self._fps_estimate <= 0.0:
+						self._fps_estimate = instant_fps
+					else:
+						# Smooth jittery image timestamp deltas.
+						self._fps_estimate = 0.9 * self._fps_estimate + 0.1 * instant_fps
+			self._last_stamp = stamp_sec
 
-	def pop_frame(self) -> np.ndarray | None:
-		if not self._frames:
-			return None
-		return self._frames.popleft()
+		def pop_frame(self) -> np.ndarray | None:
+			if not self._frames:
+				return None
+			return self._frames.popleft()
 
-	def has_frame(self) -> bool:
-		return self._first_frame_received
+		def has_frame(self) -> bool:
+			return self._first_frame_received
 
-	@property
-	def width(self) -> int:
-		return self._width
+		@property
+		def width(self) -> int:
+			return self._width
 
-	@property
-	def fps_estimate(self) -> float:
-		return self._fps_estimate
+		@property
+		def fps_estimate(self) -> float:
+			return self._fps_estimate
+else:
+	class _ImageSubscriberNode:
+		def __init__(self, _topic: str) -> None:
+			raise RuntimeError(
+				"ROS2 image provider requires 'rclpy', 'sensor_msgs', and 'cv_bridge'. "
+				"Source /opt/ros/humble/setup.bash and your workspace install/setup.bash before launching."
+			)
 
 
 class RosImageTopicVideoProvider(VideoProvider):
 	"""VideoProvider implementation that consumes ROS2 sensor_msgs/Image."""
 
 	def __init__(self, topic: str, frame_timeout_s: float = 1.0, fallback_fps: float = 30.0) -> None:
-		if rclpy is None or CvBridge is None:
+		if rclpy is None or CvBridge is None or Node is None or Image is None:
 			raise RuntimeError(
-				"ROS2 image provider requires 'rclpy', 'sensor_msgs', and 'cv_bridge'."
+				"ROS2 image provider requires 'rclpy', 'sensor_msgs', and 'cv_bridge'. "
+				"Source /opt/ros/humble/setup.bash and your workspace install/setup.bash before launching."
 			)
 
 		self._frame_timeout_s = max(0.05, float(frame_timeout_s))
