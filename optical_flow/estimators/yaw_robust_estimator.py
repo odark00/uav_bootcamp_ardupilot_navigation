@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 
-from estimators.motion_estimator import MotionEstimate, MotionEstimator
+from optical_flow.estimators.motion_estimator import MotionEstimate, MotionEstimator
 
 
 class YawRobustEstimator(MotionEstimator):

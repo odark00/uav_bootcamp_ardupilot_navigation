@@ -210,11 +210,11 @@ class OpticalFlowForwarder:
 
     def start(self) -> None:
         root = Path(__file__).resolve().parent
-        script_path = root / "optical_flow" / "optical_flow_estimator.py"
 
         cmd = [
             sys.executable,
-            str(script_path),
+            "-m",
+            "optical_flow.optical_flow_estimator",
             "--ros-image-topic",
             self._topic,
             "--altitude",

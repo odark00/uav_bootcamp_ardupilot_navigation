@@ -1,7 +1,8 @@
 docker exec -it uav_bootcamp_ardupilot_navigation-ardupilot-sitl-1 bash -lc \
- "python control_drone_gazebo.py \
+ "source /opt/ros/humble/setup.bash && \
+ source /root/ardu_ws/install/setup.bash && \
+ python control_drone_gazebo.py \
  --guided_nogps \
- --no-flow \
  --no-wind \
  --altitude 10; \
  exec bash"
