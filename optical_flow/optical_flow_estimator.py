@@ -3,6 +3,9 @@ import math
 import sys
 from collections import deque
 from dataclasses import dataclass
+import rclpy
+from rclpy.node import Node
+from std_msgs.msg import String
 
 import cv2
 import numpy as np
@@ -120,6 +123,33 @@ class StreamingReporter:
 			f"ground_distance={flow.ground_distance:.3f}",
 			flush=True,
 		)
+		
+
+	@staticmethod
+	def print_warning(frame_idx: int, reason: str) -> None:
+		print(f"frame={frame_idx:06d} warning={reason}", flush=True)
+
+
+class MavLinkReporter(Node):
+	def __init__(self, connection_string: str = "udpout:localhost:14550") -> None:
+		rclpy.init()
+		super().__init__("mavlink_reporter")
+		self.publisher = self.create_publisher(String, '/optical_flow', 10)
+
+	def maybe_print_optical_flow(self, frame_idx: int, flow: MavlinkOpticalFlow) -> None:
+		# Invert dx and dy to match the expected coordinate system for optical flow
+		res_dx_px = -flow.flow_comp_m_y * 10
+		res_dy_px = -flow.flow_comp_m_x * 10
+		msg = String()
+		msg.data = (
+            f"time_usec={flow.time_usec} sensor_id={flow.sensor_id} "
+            f"flow_x={flow.flow_x} flow_y={flow.flow_y} "
+            f"flow_comp_m_x={res_dx_px:.5f} flow_comp_m_y={res_dy_px:.5f} "
+            f"quality={flow.quality} ground_distance={flow.ground_distance:.3f}"
+        )
+		self.publisher.publish(msg)
+		print("Published OF message")
+		
 
 	@staticmethod
 	def print_warning(frame_idx: int, reason: str) -> None:
@@ -218,7 +248,7 @@ class OpticalFlowFacade:
 		self.provider: VideoProvider | None = ModuleNotFoundError
 		self.estimator: MotionEstimator | None = create_estimator('yaw_robust')
 		self.smoother: RollingVelocitySmoother | None = RollingVelocitySmoother(self.smoothing_window)
-		self.reporter: StreamingReporter | None = StreamingReporter(self.report_every)
+		self.reporter: MavLinkReporter | None = MavLinkReporter()
 		self.flow_composer: MavlinkOpticalFlowComposer | None = MavlinkOpticalFlowComposer(sensor_id=0)
 		self.display: VideoMotionDisplay | None = VideoMotionDisplay(arrow_scale_px_per_mps=40.0)
 		self.invalid_frames = 0
