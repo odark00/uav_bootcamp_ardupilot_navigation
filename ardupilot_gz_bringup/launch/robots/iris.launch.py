@@ -94,6 +94,13 @@ def generate_launch_description():
                 "config",
                 "default_params",
                 "dds_udp.parm",
+            )
+            # GPS-denied override: loaded last so it wins over the stock params.
+            + ","
+            + os.path.join(
+                pkg_project_bringup,
+                "config",
+                "gps_denied.parm",
             ),
             "sim_address": "127.0.0.1",
             "master": "tcp:127.0.0.1:5760",

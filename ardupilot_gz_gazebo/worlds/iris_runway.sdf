@@ -35,9 +35,8 @@
     <plugin filename="gz-sim-magnetometer-system"
       name="gz::sim::systems::Magnetometer">
     </plugin>
-    <plugin filename="gz-sim-navsat-system"
-      name="gz::sim::systems::NavSat">
-    </plugin>
+    <!-- NavSat (GPS) system removed: this is a GPS-denied simulation.
+         Without this system plugin any navsat sensor produces no data. -->
 
     <scene>
       <ambient>1.0 1.0 1.0</ambient>

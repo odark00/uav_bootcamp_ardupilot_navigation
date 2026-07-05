@@ -1,0 +1,21 @@
+# GPS-denied configuration for the iris SITL sim.
+# Loaded AFTER gazebo-iris-gimbal.parm (see robots/iris.launch.py), so these
+# values override the stock GPS-enabled defaults.
+#
+# Effect: ArduPilot has no GPS backend and the EKF uses no GPS source. The
+# vehicle can fly Stabilize / AltHold but will NOT hold horizontal position and
+# will NOT arm in GPS-dependent modes (Loiter, Auto, Guided, RTL).
+
+# --- Disable the GPS driver so ArduPilot has no GPS backend ---
+# GPS_TYPE is the pre-4.5 name, GPS1_TYPE the 4.5+ name. Setting both is safe:
+# the firmware ignores whichever parameter it does not define.
+GPS_TYPE         0
+GPS1_TYPE        0
+
+# --- Remove GPS from the EKF3 source set (no replacement source) ---
+AHRS_EKF_TYPE    3
+EK3_SRC1_POSXY   0    # horizontal position: none
+EK3_SRC1_VELXY   0    # horizontal velocity: none
+EK3_SRC1_POSZ    1    # vertical position: barometer
+EK3_SRC1_VELZ    0    # vertical velocity: none
+EK3_SRC1_YAW     1    # yaw: compass
