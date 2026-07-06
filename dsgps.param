@@ -14,22 +14,18 @@ AHRS_GPS_MINSATS,0
 
 # --- Optical flow ---
 SIM_FLOW_ENABLE,1
-# --- SIM_FLOW_DELAY,1 ---
+SIM_FLOW_DELAY,1
 FLOW_TYPE,5
 
 # --- EKF sources (flow-only horizontal nav, baro/compass otherwise) ---
 # POSXY=0: no absolute horizontal position source (GPS off); EKF integrates
 #          flow velocity into a *relative* position -> satisfies GUIDED.
 # VELXY=5: horizontal velocity from optical flow.
-EK3_SRC1_POSXY,0
+EK3_SRC1_POSXY,5
 EK3_SRC1_VELXY,5
 EK3_SRC1_POSZ,1
 #EK3_SRC1_VELZ,0
 EK3_SRC1_YAW,1
-
-# Feed a MAVLink rangefinder so EKF can scale optical flow robustly.
-RNGFND1_TYPE,10
-RNGFND1_ORIENT,25
 
 
 # --- Misc safety ---

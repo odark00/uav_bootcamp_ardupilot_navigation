@@ -1,4 +1,40 @@
 # UAV Bootcamp ArduPilot Navigation
+# Run
+
+Terminal 1
+
+```bash
+./start.sh
+```
+
+
+Terminal 2
+
+```bash
+./enter.sh
+ros2 launch ardupilot_gz_bringup iris_runway.launch.py
+```
+
+
+Terminal 3
+
+```bash
+./enter.sh
+mavproxy.py --console
+param load dsgps.param
+```
+
+Exit from Terminal 3, and kill and run again "ros2 launch ardupilot_gz_bringup iris_runway.launch.py"
+
+Terminal 4
+
+```bash
+./run_control_drone.sh
+```
+
+
+
+### ----
 
 Iris quadcopter in Gazebo + ArduPilot SITL, with a straight-line "cruise" flight,
 optical-flow lateral wind compensation, a runtime-tunable Gazebo wind field, and a

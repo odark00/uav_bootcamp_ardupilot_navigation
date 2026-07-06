@@ -49,13 +49,3 @@ class MavlinkPublisher:
         )
         print(f"Sending received ROS message to Mavlink: {message}")
         self.mav.optical_flow_send(*message)
-        self.mav.distance_sensor_send(
-            0,
-            0,
-            4000,
-            int(ground_distance * 100.0),
-            0,
-            sensor_id,
-            25,
-            0,
-        )
