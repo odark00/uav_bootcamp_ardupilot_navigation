@@ -3,6 +3,8 @@ import math
 import sys
 from collections import deque
 from dataclasses import dataclass
+from time import time
+from constants import OPTOCAL_FLOW_TOPIC
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
@@ -80,7 +82,7 @@ class MavlinkOpticalFlowComposer:
 		meters_per_pixel_scale: float,
 		ground_distance_m: float,
 	) -> MavlinkOpticalFlow:
-		time_usec = int((frame_idx / fps) * 1_000_000.0)
+		time_usec = int(time() * 1e6)
 
 		# MAVLink flow_x/flow_y use dpix units (deci-pixels).
 		flow_x = self._clamp_int16(int(round(estimate.dx_px * 10.0)))
@@ -104,25 +106,25 @@ class MavlinkOpticalFlowComposer:
 		)
 
 
-class StreamingReporter:
-	def __init__(self, every_n_frames: int) -> None:
-		self.every_n_frames = max(1, every_n_frames)
+# class StreamingReporter:
+# 	def __init__(self, every_n_frames: int) -> None:
+# 		self.every_n_frames = max(1, every_n_frames)
 
-	def maybe_print_optical_flow(self, frame_idx: int, flow: MavlinkOpticalFlow) -> None:
-		if frame_idx % self.every_n_frames != 0:
-			return
-		print(
-			"OPTICAL_FLOW(100) "
-			f"time_usec={flow.time_usec} "
-			f"sensor_id={flow.sensor_id} "
-			f"flow_x={flow.flow_x} "
-			f"flow_y={flow.flow_y} "
-			f"flow_comp_m_x={flow.flow_comp_m_x:.5f} "
-			f"flow_comp_m_y={flow.flow_comp_m_y:.5f} "
-			f"quality={flow.quality} "
-			f"ground_distance={flow.ground_distance:.3f}",
-			flush=True,
-		)
+# 	def maybe_print_optical_flow(self, frame_idx: int, flow: MavlinkOpticalFlow) -> None:
+# 		if frame_idx % self.every_n_frames != 0:
+# 			return
+# 		print(
+# 			"OPTICAL_FLOW(100) "
+# 			f"time_usec={flow.time_usec} "
+# 			f"sensor_id={flow.sensor_id} "
+# 			f"flow_x={flow.flow_x} "
+# 			f"flow_y={flow.flow_y} "
+# 			f"flow_comp_m_x={flow.flow_comp_m_x:.5f} "
+# 			f"flow_comp_m_y={flow.flow_comp_m_y:.5f} "
+# 			f"quality={flow.quality} "
+# 			f"ground_distance={flow.ground_distance:.3f}",
+# 			flush=True,
+# 		)
 		
 
 	@staticmethod
@@ -132,8 +134,8 @@ class StreamingReporter:
 
 class MavLinkReporter(Node):
 	def __init__(self) -> None:
-		super().__init__("mavlink_reporter")
-		self.publisher = self.create_publisher(String, '/optical_flow', 10)
+		super().__init__("optical_flow_reporter")
+		self.publisher = self.create_publisher(String, OPTOCAL_FLOW_TOPIC, 10)
 
 	def maybe_print_optical_flow(self, frame_idx: int, flow: MavlinkOpticalFlow) -> None:
 		# Invert dx and dy to match the expected coordinate system for optical flow
@@ -147,7 +149,6 @@ class MavLinkReporter(Node):
             f"quality={flow.quality} ground_distance={flow.ground_distance:.3f}"
         )
 		self.publisher.publish(msg)
-		print("Published Optical flow message")
 		
 
 	@staticmethod
@@ -240,6 +241,7 @@ class VideoMotionDisplay:
 
 class OpticalFlowFacade:
 	def __init__(self, report_every = 1, smoothing_window = 5, ros_image_topic: str = "camera/image", hfov: float = 115.0, width: int = 640) -> None:
+		rclpy.init()
 		self.report_every = max(1, report_every)
 		self.smoothing_window = max(1, smoothing_window)
 		self.hfov = hfov
@@ -507,9 +509,11 @@ def main() -> int:
 	print("Starting processing...", flush=True)
 
 	while True:
+		frame_idx += 1
 		ok, frame = facade.provider.read()
 		if not ok:
-			break
+			print(f"Could not read frame {frame_idx}")
+			continue
 
 		msg = facade.process_frame(
 			frame_idx=frame_idx,

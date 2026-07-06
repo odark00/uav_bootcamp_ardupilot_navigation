@@ -7,9 +7,12 @@ import argparse
 from dataclasses import dataclass
 import math
 import subprocess
+import threading
 from optical_flow.optical_flow_forwarder import OpticalFlowForwarder
+from optical_flow_ros2_subscriber import MavlinkPublisher, OpticalFlowRos2Subscriber
 from pymavlink import mavutil
 import time
+import rclpy
 
 
 @dataclass
@@ -765,6 +768,16 @@ if __name__ == "__main__":
         set_gz_wind(args.wind[0], args.wind[1], args.wind[2])
 
     mav = init_connections()
+    rclpy.init()
+    publisher = MavlinkPublisher(mav)
+    subscriber = OpticalFlowRos2Subscriber(publisher.ros_callback)
+    
+    ros_spin_thread = threading.Thread(
+        target=rclpy.spin,
+        args=(subscriber,),
+        daemon=True,
+    )
+    ros_spin_thread.start()
 
     flow_forwarder: OpticalFlowForwarder | None = None
     if not args.no_flow:
@@ -789,5 +802,8 @@ if __name__ == "__main__":
     finally:
         if flow_forwarder is not None:
             flow_forwarder.stop()
+        subscriber.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
 
     print("[+] Mission finished. Press Q to close camera.")
