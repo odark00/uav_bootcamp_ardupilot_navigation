@@ -131,8 +131,7 @@ class StreamingReporter:
 
 
 class MavLinkReporter(Node):
-	def __init__(self, connection_string: str = "udpout:localhost:14550") -> None:
-		rclpy.init()
+	def __init__(self) -> None:
 		super().__init__("mavlink_reporter")
 		self.publisher = self.create_publisher(String, '/optical_flow', 10)
 
@@ -148,7 +147,7 @@ class MavLinkReporter(Node):
             f"quality={flow.quality} ground_distance={flow.ground_distance:.3f}"
         )
 		self.publisher.publish(msg)
-		print("Published OF message")
+		print("Published Optical flow message")
 		
 
 	@staticmethod

@@ -12,6 +12,8 @@ COPY ./ardupilot_gz_bringup /root/ardu_ws/src/ardupilot_gz/ardupilot_gz_bringup
 COPY ./iris_with_gimbal /root/ardu_ws/src/ardupilot_gz/ardupilot_gz_description/models/iris_with_gimbal
 COPY ./aerial_ground /root/ardu_ws/src/ardupilot_gz/ardupilot_gz_description/models/aerial_ground
 COPY ./optical_flow /root/ardu_ws/optical_flow
+COPY ./dsgps.param /root/ardu_ws/dsgps.param
+COPY ./optical_flow_ros2_subscriber.py /root/ardu_ws/optical_flow_ros2_subscriber.py
 
 # Make the copied models resolvable. The world uses model://iris_with_gimbal and
 # model://aerial_ground (incl. its albedo texture); those resolve only if the
