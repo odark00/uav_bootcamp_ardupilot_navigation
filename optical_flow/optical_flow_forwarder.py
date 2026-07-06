@@ -111,7 +111,7 @@ class OpticalFlowForwarder:
                         self._valid_flow_count += 1
                 continue
 
-            # print(f"[optical-flow] {line}")
+            print(f"[optical-flow] {line}")
 
         if self._process.poll() not in (None, 0):
             print(f"[optical-flow] Process exited with code {self._process.returncode}")

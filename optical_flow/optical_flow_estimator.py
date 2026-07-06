@@ -106,25 +106,25 @@ class MavlinkOpticalFlowComposer:
 		)
 
 
-# class StreamingReporter:
-# 	def __init__(self, every_n_frames: int) -> None:
-# 		self.every_n_frames = max(1, every_n_frames)
+class StreamingReporter:
+	def __init__(self, every_n_frames: int) -> None:
+		self.every_n_frames = max(1, every_n_frames)
 
-# 	def maybe_print_optical_flow(self, frame_idx: int, flow: MavlinkOpticalFlow) -> None:
-# 		if frame_idx % self.every_n_frames != 0:
-# 			return
-# 		print(
-# 			"OPTICAL_FLOW(100) "
-# 			f"time_usec={flow.time_usec} "
-# 			f"sensor_id={flow.sensor_id} "
-# 			f"flow_x={flow.flow_x} "
-# 			f"flow_y={flow.flow_y} "
-# 			f"flow_comp_m_x={flow.flow_comp_m_x:.5f} "
-# 			f"flow_comp_m_y={flow.flow_comp_m_y:.5f} "
-# 			f"quality={flow.quality} "
-# 			f"ground_distance={flow.ground_distance:.3f}",
-# 			flush=True,
-# 		)
+	def maybe_print_optical_flow(self, frame_idx: int, flow: MavlinkOpticalFlow) -> None:
+		if frame_idx % self.every_n_frames != 0:
+			return
+		print(
+			"OPTICAL_FLOW(100) "
+			f"time_usec={flow.time_usec} "
+			f"sensor_id={flow.sensor_id} "
+			f"flow_x={flow.flow_x} "
+			f"flow_y={flow.flow_y} "
+			f"flow_comp_m_x={flow.flow_comp_m_x:.5f} "
+			f"flow_comp_m_y={flow.flow_comp_m_y:.5f} "
+			f"quality={flow.quality} "
+			f"ground_distance={flow.ground_distance:.3f}",
+			flush=True,
+		)
 		
 
 	@staticmethod
