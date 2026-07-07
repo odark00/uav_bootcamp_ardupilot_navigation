@@ -611,7 +611,6 @@ def mission_cruise(mav, speed, altitude_m=10.0, guided_nogps=False):
     if not arm(mav, force=True):
         return
 
-    #if guided_nogps:
     takeoff_nogps(mav, altitude_m, ground_hpa, hold_yaw_deg)
     # Open-loop forward pitch (~1.7 deg per m/s, nose down); heading held.
     pitch_cmd = -max(2.0, min(15.0, float(speed) * 1.7))
@@ -620,65 +619,32 @@ def mission_cruise(mav, speed, altitude_m=10.0, guided_nogps=False):
         f"yaw={hold_yaw_deg:.0f} deg held, baro alt-hold @ {float(altitude_m):.1f} m. "
         f"Ctrl-C to stop."
     )
-    #else:
-    #    takeoff(mav, altitude_m)
-    #    print(f"[*] Cruise control: holding {float(speed):.1f} m/s due NORTH, yaw=0. Ctrl-C to stop.")
 
     north = east = down = 0.0
     heading_deg = 0.0
     alt = float(altitude_m)
     next_status_at = 0.0
     while True:
-        # if guided_nogps:
-        #     press = read_pressure(mav)
-        #     if press is not None:
-        #         alt = pressure_to_alt(press, ground_hpa)
-        #     # Pitch forward only while altitude is in band; if we drift out, level
-        #     # off so all thrust recovers height (matches nogps fly_forward). Yaw is
-        #     # held at the captured heading, so the track stays straight.
-        #     in_band = abs(alt - float(altitude_m)) <= ALT_BAND
-        #     cmd_pitch = pitch_cmd if in_band else 0.0
-        #     thrust = alt_thrust(alt, float(altitude_m))
-        #     send_attitude(mav, pitch_deg=cmd_pitch, yaw_deg=hold_yaw_deg, thrust=thrust)
-        #     tag = "fwd " if in_band else "recov"
-        #     status = (f"[flying:{tag}] baro alt={alt:.1f} m  pitch={cmd_pitch:.1f}  "
-        #               f"thrust={thrust:.2f}  yaw={hold_yaw_deg:.0f}")
-        # else:
-        # Drain the latest position + attitude telemetry (also keeps reading
-        # the socket) without blocking the command rate.
-        while True:
-            msg = mav.recv_match(type=['LOCAL_POSITION_NED', 'ATTITUDE'], blocking=False)
-            if msg is None:
-                break
-            if msg.get_type() == 'LOCAL_POSITION_NED':
-                north, east, down = msg.x, msg.y, msg.z
-            else:  # ATTITUDE
-                heading_deg = (math.degrees(msg.yaw) + 360.0) % 360.0
-        # World-frame NED velocity due north (vx=north, vy=0), fixed yaw=0.
         send_velocity(
             mav,
             vx=float(speed), vy=0.0, vz=0.0,
-            yaw=0.0, use_yaw=True,
+            yaw=0.0, use_yaw=False,
             frame=mavutil.mavlink.MAV_FRAME_LOCAL_NED,
-        )
-        status = (
-            f"[flying] N={north:+.1f} E={east:+.1f} alt={-down:.1f} m | "
-            f"yaw={heading_deg:.1f} deg | vx_cmd={float(speed):.1f} m/s"
         )
 
         now = time.time()
         if now >= next_status_at:
             # print(status)
             next_status_at = now + 1.0
-        time.sleep(0.05)
+        time.sleep(0.001)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run guided mission with optional optical-flow display (no SITL forwarding)."
     )
-    parser.add_argument("--altitude", type=float, default=10.0, help="Mission takeoff altitude in meters")
-    parser.add_argument("--speed", type=float, default=3.0, help="Forward flight speed in m/s (body-frame vx, along heading)")
+    parser.add_argument("--altitude", type=float, default=3.0, help="Mission takeoff altitude in meters")
+    parser.add_argument("--speed", type=float, default=10.0, help="Forward flight speed in m/s (body-frame vx, along heading)")
     parser.add_argument(
         "--guided_nogps",
         action="store_true",

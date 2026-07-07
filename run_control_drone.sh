@@ -3,5 +3,5 @@ docker exec -it uav_bootcamp_ardupilot_navigation-ardupilot-sitl-1 bash -lc \
  python control_drone_gazebo.py \
  --guided_nogps \
  --no-wind \
- --altitude 10; \
+ --altitude 3; \
  exec bash"
