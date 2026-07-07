@@ -5,6 +5,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && pip3 install MAVProxy pymavlink \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# Headless rendering + web streaming: virtual X server (software GL) for GUI
+# rendering, plus VNC/noVNC to stream the Gazebo GUI and RViz to the browser.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+xvfb x11vnc fluxbox novnc websockify \
+mesa-utils libgl1-mesa-dri libglu1-mesa \
+libxcb-xinerama0 libxkbcommon-x11-0 x11-utils xauth fonts-dejavu-core \
+&& apt-get clean && rm -rf /var/lib/apt/lists/*
+
 COPY ./control_drone_gazebo.py /root/ardu_ws/control_drone_gazebo.py
 COPY ./nogps_control_drone_gazebo.py /root/ardu_ws/nogps_control_drone_gazebo.py
 COPY ./ardupilot_gz_gazebo /root/ardu_ws/src/ardupilot_gz/ardupilot_gz_gazebo
@@ -36,4 +44,10 @@ RUN bash -c "source /opt/ros/humble/setup.bash && \
 # -- no extra dependencies. Auto-started by the docker-compose `command`.
 # Kept below the colcon build so it doesn't invalidate that expensive layer.
 COPY ./plot_ground_truth.py /root/ardu_ws/plot_ground_truth.py
+
+# Gazebo-GUI-over-noVNC entrypoint. Copied last so iterating on the script does
+# not invalidate the (expensive) colcon build layer above.
+COPY ./gz_web.sh /usr/local/bin/gz_web.sh
+RUN chmod +x /usr/local/bin/gz_web.sh
+
 RUN echo "source /root/ardu_ws/install/setup.bash" >> /root/.bashrc

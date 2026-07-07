@@ -34,6 +34,7 @@ master:=tcp:127.0.0.1:5760
 sitl:=127.0.0.1:5501
 """
 import os
+import xml.etree.ElementTree as ET
 
 from ament_index_python.packages import get_package_share_directory
 
@@ -53,6 +54,41 @@ from launch.substitutions import PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
+
+def _resolve_package_uri(uri):
+    """package://<pkg>/<relpath>  ->  <pkg_share>/<relpath>."""
+    pkg, rel = uri[len("package://"):].split("/", 1)
+    return os.path.join(get_package_share_directory(pkg), rel)
+
+
+def load_flat_robot_description(sdf_path):
+    """Read a model SDF and inline any <include merge="true"> sub-models.
+
+    robot_state_publisher's sdformat_urdf parser cannot resolve <include> URIs
+    (libsdformat's findFile callback is unset in that context), which is why the
+    raw iris_with_gimbal SDF produces "Unable to find uri[...]" / "A model must
+    have at least one link" errors. We resolve the package:// includes here and
+    splice the referenced models' links/joints/frames directly into the parent,
+    handing robot_state_publisher a flat, include-free model it can convert.
+    """
+    tree = ET.parse(sdf_path)
+    model = tree.getroot().find("model")
+    for inc in list(model.findall("include")):
+        if inc.get("merge") != "true":
+            continue
+        sub_path = os.path.join(_resolve_package_uri(inc.find("uri").text.strip()),
+                                "model.sdf")
+        sub_model = ET.parse(sub_path).getroot().find("model")
+        for tag in ("link", "joint", "frame"):
+            for el in sub_model.findall(tag):
+                model.append(el)
+        model.remove(inc)
+    # The implicit canonical (root) link defaults to the first <link>, but after
+    # merging that is camera_link, which is a joint child - illegal for a root.
+    # Pin the canonical link to base_link (the merged iris_with_standoffs root).
+    if model.find("link[@name='base_link']") is not None:
+        model.set("canonical_link", "base_link")
+    return ET.tostring(tree.getroot(), encoding="unicode")
 
 
 def generate_launch_description():
@@ -121,13 +157,14 @@ def generate_launch_description():
         else:
             os.environ["SDF_PATH"] = gz_sim_resource_path
 
-    # Load SDF file.
+    # Load the customised iris_with_gimbal (fixed nadir camera, no gimbal) shipped
+    # in ardupilot_gz_description - NOT ardupilot_gazebo's stock gimbal model - and
+    # inline its <include> so sdformat_urdf can parse it (see helper above).
     sdf_file = os.path.join(
-        pkg_ardupilot_gazebo, "models", "iris_with_gimbal", "model.sdf"
+        get_package_share_directory("ardupilot_gz_description"),
+        "models", "iris_with_gimbal", "model.sdf",
     )
-    with open(sdf_file, "r") as infp:
-        robot_desc = infp.read()
-        # print(robot_desc)
+    robot_desc = load_flat_robot_description(sdf_file)
 
     # Publish /tf and /tf_static.
     robot_state_publisher = Node(

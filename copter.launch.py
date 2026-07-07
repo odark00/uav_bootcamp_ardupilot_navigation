@@ -83,7 +83,7 @@ def generate_launch_description():
             f'{Path(pkg_ros_gz_sim) / "launch" / "gz_sim.launch.py"}'
         ),
         launch_arguments={
-            "gz_args": "-v4 -s -r "
+            "gz_args": "-v4 -s -r --headless-rendering "
             + f'{Path(pkg_project_gazebo) / "worlds" / "iris_runway.sdf"}'
         }.items(),
     )
@@ -93,6 +93,7 @@ def generate_launch_description():
             f'{Path(pkg_ros_gz_sim) / "launch" / "gz_sim.launch.py"}'
         ),
         launch_arguments={"gz_args": "-v4 -g"}.items(),
+        condition=IfCondition(LaunchConfiguration("gui")),
     )
 
     # RViz.
@@ -109,7 +110,10 @@ def generate_launch_description():
     return LaunchDescription(
         [
             DeclareLaunchArgument(
-                "rviz", default_value="true", description="Open RViz."
+                "rviz", default_value="false", description="Open RViz."
+            ),
+            DeclareLaunchArgument(
+                "gui", default_value="false", description="Open the Gazebo GUI."
             ),
             gz_sim_server,
             gz_sim_gui,

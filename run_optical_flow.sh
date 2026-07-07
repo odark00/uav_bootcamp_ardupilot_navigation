@@ -4,7 +4,7 @@ docker exec -it uav_bootcamp_ardupilot_navigation-ardupilot-sitl-1 bash -lc \
         --ros-image-topic /camera/image \
         --altitude 10 \
         --fps 30 \
-        --display \
-        --log-optical-flow \
+        #--display \
+        #--log-optical-flow \
         --estimator yaw_robust; \
     exec bash"
