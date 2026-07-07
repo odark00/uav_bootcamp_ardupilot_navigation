@@ -41,14 +41,25 @@ class MavlinkPublisher:
 
     def send_mavlink_flow(self, vx=0.0, vy=0.0, flow_x=0, flow_y=0, sensor_id=0, quality=255, ground_distance=1.0):
         ground_distance = max(0.1, float(ground_distance))
+
+        # ArduPilot's AP_OpticalFlow_MAV backend consumes ONLY flow_x/flow_y (it sums
+        # packet.flow_x/flow_y and ignores flow_comp_m_*, flow_rate_*, and
+        # ground_distance). So the camera->body-frame direction correction MUST be
+        # applied here on flow_x/flow_y -- transforms on flow_comp_m_* never reach nav,
+        # which is why earlier "invert dy" fixes didn't change flight direction.
+        # Camera is rotated 90deg vs body frame: body_x = -image_y, body_y = +image_x.
+        # (If it still flies wrong, adjust these two lines -- direction is mount-dependent.)
+        body_flow_x = -flow_y
+        body_flow_y = flow_x
+
         message = (
-            int(time.time() * 1e6),  # time_usec (uint64)
-            sensor_id,               # sensor_id (uint8)
-            flow_x, flow_y,          # flow_x, flow_y (int16, rad/sec*1000)
-            float(vx), float(vy),    # flow_comp_m_x, flow_comp_m_y (float)
-            quality,                 # quality (uint8)
-            ground_distance,         # ground_distance (float, meters)
-            0.0, 0.0                 # flow_rate_x, flow_rate_y (float)
+            int(time.time() * 1e6),    # time_usec (uint64)
+            sensor_id,                 # sensor_id (uint8)
+            body_flow_x, body_flow_y,  # flow_x, flow_y (int16) -- ONLY fields ArduPilot uses
+            float(vx), float(vy),      # flow_comp_m_x, flow_comp_m_y (float, ignored by AP)
+            quality,                   # quality (uint8)
+            ground_distance,           # ground_distance (float, meters, ignored by AP)
+            0.0, 0.0                   # flow_rate_x, flow_rate_y (float, ignored by AP)
         )
         if self.log:
             print(f"Sending received ROS message to Mavlink: {message}")

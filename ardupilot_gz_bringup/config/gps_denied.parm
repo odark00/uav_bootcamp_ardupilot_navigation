@@ -26,7 +26,10 @@ EK2_ENABLE,0
 EK3_ENABLE,1
 AHRS_EKF_TYPE,3
 AHRS_OPTIONS,24
-EK3_SRC1_POSXY   5
+# Optical flow is a velocity sensor, not a position sensor: 5/OpticalFlow is only
+# a valid VELXY source. POSXY must be 0 (None) -- the EKF dead-reckons horizontal
+# position by integrating the flow velocity internally. (5 was out-of-range here.)
+EK3_SRC1_POSXY   0
 EK3_SRC1_VELXY   5
 EK3_SRC1_POSZ    1
 #EK3_SRC1_VELZ    0
