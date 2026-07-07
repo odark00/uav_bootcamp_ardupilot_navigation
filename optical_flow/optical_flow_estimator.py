@@ -139,8 +139,10 @@ class MavLinkReporter(Node):
 
 	def maybe_print_optical_flow(self, frame_idx: int, flow: MavlinkOpticalFlow) -> None:
 		# Invert dx and dy to match the expected coordinate system for optical flow
-		res_dx_px = flow.flow_comp_m_y * 3
-		res_dy_px = -flow.flow_comp_m_x * 3
+		res_dx_px = -flow.flow_comp_m_y * 3
+		res_dy_px = flow.flow_comp_m_x * 3
+		print(f"Received optical flow: dx={flow.flow_comp_m_x:.2f} dy={flow.flow_comp_m_y:.2f}")
+		print(f"Sending optical flow: dx={res_dx_px:.2f} dy={res_dy_px:.2f}")
 		msg = String()
 		msg.data = (
             f"time_usec={flow.time_usec} sensor_id={flow.sensor_id} "
