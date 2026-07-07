@@ -22,7 +22,7 @@ set -euo pipefail
 CONTAINER="uav_bootcamp_ardupilot_navigation-ardupilot-sitl-1"
 WORLD="map"
 
-SPEED="${1:-5}"
+SPEED="${1:-3}"
 FROM="${2:-E}"
 
 # Compass point -> bearing in degrees (the direction the wind comes FROM).
