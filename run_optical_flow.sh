@@ -1,1 +1,10 @@
-docker exec -it uav_bootcamp_ardupilot_navigation-ardupilot-sitl-1 bash -lc "source /opt/ros/humble/setup.bash && python -m optical_flow.optical_flow_estimator --ros-image-topic /camera/image --altitude 10 --fps 30 --display --estimator yaw_robust; exec bash"
+docker exec -it uav_bootcamp_ardupilot_navigation-ardupilot-sitl-1 bash -lc \
+    "source /opt/ros/humble/setup.bash \
+    && python -m optical_flow.optical_flow_estimator \
+        --ros-image-topic /camera/image \
+        --altitude 10 \
+        --fps 30 \
+        --display \
+        --log-optical-flow \
+        --estimator yaw_robust; \
+    exec bash"

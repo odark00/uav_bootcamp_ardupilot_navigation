@@ -242,10 +242,11 @@ class VideoMotionDisplay:
 
 
 class OpticalFlowFacade:
-	def __init__(self, report_every = 1, smoothing_window = 5, ros_image_topic: str = "camera/image", hfov: float = 115.0, width: int = 640) -> None:
+	def __init__(self, report_every = 1, smoothing_window = 5, ros_image_topic: str = "camera/image", hfov: float = 115.0, width: int = 640, display: bool = False, arrow_scale: float = 40.0, log: bool = True) -> None:
 		rclpy.init()
 		self.report_every = max(1, report_every)
 		self.smoothing_window = max(1, smoothing_window)
+		self.log = bool(log)
 		self.hfov = hfov
 		self.width = width
 		self.provider: VideoProvider | None = ModuleNotFoundError
@@ -253,7 +254,9 @@ class OpticalFlowFacade:
 		self.smoother: RollingVelocitySmoother | None = RollingVelocitySmoother(self.smoothing_window)
 		self.reporter: MavLinkReporter | None = MavLinkReporter()
 		self.flow_composer: MavlinkOpticalFlowComposer | None = MavlinkOpticalFlowComposer(sensor_id=0)
-		self.display: VideoMotionDisplay | None = VideoMotionDisplay(arrow_scale_px_per_mps=40.0)
+		self.display: VideoMotionDisplay | None = (
+			VideoMotionDisplay(arrow_scale_px_per_mps=arrow_scale) if display else None
+		)
 		self.invalid_frames = 0
 
 		try:
@@ -304,7 +307,7 @@ class OpticalFlowFacade:
 				)
 			return flow_msg
 		else:
-			if estimate.note and frame_idx % max(10, self.report_every) == 0:
+			if self.log and estimate.note and frame_idx % max(10, self.report_every) == 0:
 				self.reporter.print_warning(frame_idx, estimate.note)
 
 			if self.display is not None:
@@ -477,16 +480,24 @@ def parse_args() -> argparse.Namespace:
 		default=0,
 		help="MAVLink optical flow sensor ID (0..255, default: 0)",
 	)
+	parser.add_argument(
+		"--log-optical-flow",
+		action="store_true",
+		help="Print optical-flow status/telemetry logs (off unless this flag is passed)",
+	)
 	return parser.parse_args()
 
 
-def create_optical_flow_facade():
+def create_optical_flow_facade(display: bool = False, arrow_scale: float = 40.0, log: bool = True):
 	return OpticalFlowFacade(
 		report_every=1,
 		smoothing_window=5,
 		ros_image_topic="camera/image",
 		hfov=115.0,
-		width=640
+		width=640,
+		display=display,
+		arrow_scale=arrow_scale,
+		log=log,
 	)
 
 
@@ -505,16 +516,21 @@ def main() -> int:
 
 
 	frame_idx = 0
+	log = args.log_optical_flow
 
-	facade = create_optical_flow_facade()
+	facade = create_optical_flow_facade(
+		display=args.display, arrow_scale=args.arrow_scale, log=log
+	)
 
-	print("Starting processing...", flush=True)
+	if log:
+		print("Starting processing...", flush=True)
 
 	while True:
 		frame_idx += 1
 		ok, frame = facade.provider.read()
 		if not ok:
-			print(f"Could not read frame {frame_idx}")
+			if log:
+				print(f"Could not read frame {frame_idx}", flush=True)
 			continue
 
 		msg = facade.process_frame(
@@ -523,7 +539,8 @@ def main() -> int:
 			fps=30.0,
 			altitude_m=args.altitude,
 		)
-		print(f"[optical_flow_estimator] frame={frame_idx} msg={msg}")
+		if log:
+			print(f"[optical_flow_estimator] frame={frame_idx} msg={msg}", flush=True)
 
 	return 0
 

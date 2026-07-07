@@ -82,12 +82,13 @@ docker exec -it uav_bootcamp_ardupilot_navigation-ardupilot-sitl-1 \
 | `--guided_nogps` | off | Fly the GPS-denied GUIDED_NOGPS attitude cruise instead of GUIDED velocity cruise (see [GPS-denied](#gps-denied-guided_nogps)) |
 | `--disable-gps-after-takeoff S` | `10` | Disable GPS this many seconds after takeoff (set `<0` to never disable) |
 | `--no-flow` | off | Don't launch the optical-flow estimator (pure straight flight) |
+| `--display` | off | Show the optical-flow debug window (needs a GUI/X backend; off by default so it runs headless) |
 | `--no-wind` | off | Zero the Gazebo wind at startup (WindEffects) — baseline / no-wind test |
 | `--wind VX VY VZ` | — | Set Gazebo wind (m/s, **world frame**) at startup, e.g. `--wind 8 8 0` |
 
 Optical-flow tuning flags (`--flow-min-quality`, `--flow-max-stale`, `--fallback-lateral-gain`,
-`--fallback-max-vy`, `--flow-topic`, `--flow-hfov`, `--flow-fps`, `--flow-sensor-id`,
-`--no-flow-display`) are also available — see `python control_drone_gazebo.py --help`.
+`--fallback-max-vy`, `--flow-topic`, `--flow-hfov`, `--flow-fps`, `--flow-sensor-id`) are also
+available — see `python control_drone_gazebo.py --help`.
 
 `--no-wind` and `--wind` tune the live sim over gz-transport — **no world rebuild needed**.
 If both are given, `--no-wind` wins.
@@ -140,8 +141,17 @@ Run the estimator in its own terminal in the same container (helper: `./run_opti
 
 ```bash
 python optical_flow/optical_flow_estimator.py \
-  --ros-image-topic /camera/image --altitude 10 --fps 30 --display --estimator yaw_robust
+  --ros-image-topic /camera/image --altitude 10 --fps 30 --display --log-optical-flow --estimator yaw_robust
 ```
+
+Two flags control the estimator's output; both are **off by default** so it runs quiet and
+headless:
+
+| Flag | Default | Meaning |
+|------|---------|---------|
+| `--display` | off | Show the processed video with a direction arrow (needs a GUI/X backend) |
+| `--arrow-scale PX` | `40` | Arrow length in pixels per m/s when using `--display` |
+| `--log-optical-flow` | off | Print optical-flow status/telemetry logs to the console |
 
 When flow is running and the control script is started **without** `--no-flow`, the flow's
 lateral velocity estimate is used to command a small `vy` correction that counters wind

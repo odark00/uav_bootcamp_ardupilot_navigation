@@ -19,12 +19,15 @@ class OpticalFlowRos2Subscriber(Node):
 
 
 class MavlinkPublisher:
-    def __init__(self, mav):
-        print("Initializing Mavlink publisher for optical flow...")
+    def __init__(self, mav, log: bool = False):
+        self.log = bool(log)
+        if self.log:
+            print("Initializing Mavlink publisher for optical flow...")
         self.mav = mav.mav
 
     def ros_callback(self, msg: String):
-        print(f"Received ROS message: {msg.data}")
+        if self.log:
+            print(f"Received ROS message: {msg.data}")
         # Parse the String message to extract the necessary fields
         fields = dict(item.split('=') for item in msg.data.split() if '=' in item)
         flow_comp_m_x = float(fields.get('flow_comp_m_x', 0.0))
@@ -47,5 +50,6 @@ class MavlinkPublisher:
             ground_distance,         # ground_distance (float, meters)
             0.0, 0.0                 # flow_rate_x, flow_rate_y (float)
         )
-        print(f"Sending received ROS message to Mavlink: {message}")
+        if self.log:
+            print(f"Sending received ROS message to Mavlink: {message}")
         self.mav.optical_flow_send(*message)

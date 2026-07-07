@@ -20,6 +20,7 @@ class OpticalFlowForwarder:
         display: bool,
         report_every: int,
         sensor_id: int,
+        log: bool = True,
     ) -> None:
         self._altitude_m = float(altitude_m)
         self._topic = topic
@@ -28,6 +29,7 @@ class OpticalFlowForwarder:
         self._display = bool(display)
         self._report_every = max(1, int(report_every))
         self._sensor_id = max(0, min(255, int(sensor_id)))
+        self._log = bool(log)
 
         self._process: subprocess.Popen[str] | None = None
         self._reader_thread: threading.Thread | None = None
@@ -62,6 +64,8 @@ class OpticalFlowForwarder:
             cmd.extend(["--fps", f"{self._fps}"])
         if self._display:
             cmd.append("--display")
+        if self._log:
+            cmd.append("--log-optical-flow")
 
         print("[*] Starting optical flow process:")
         print("    " + " ".join(cmd))

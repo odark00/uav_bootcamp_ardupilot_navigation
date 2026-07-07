@@ -700,14 +700,19 @@ def parse_args() -> argparse.Namespace:
         help="MAVLink optical flow sensor ID (0..255)",
     )
     parser.add_argument(
-        "--no-flow-display",
+        "--display",
         action="store_true",
-        help="Disable optical flow debug display window (display enabled by default)",
+        help="Show optical flow debug display window (off by default; requires a GUI/X backend)",
     )
     parser.add_argument(
         "--no-flow",
         action="store_true",
         help="Disable optical flow process launch/forwarding",
+    )
+    parser.add_argument(
+        "--log-optical-flow",
+        action="store_true",
+        help="Print optical-flow status/telemetry logs (off unless this flag is passed)",
     )
     parser.add_argument(
         "--no-wind",
@@ -735,7 +740,7 @@ if __name__ == "__main__":
 
     mav = init_connections()
     rclpy.init()
-    publisher = MavlinkPublisher(mav)
+    publisher = MavlinkPublisher(mav, log=args.log_optical_flow)
     subscriber = OpticalFlowRos2Subscriber(publisher.ros_callback)
     
     ros_spin_thread = threading.Thread(
@@ -752,9 +757,10 @@ if __name__ == "__main__":
             topic=args.flow_topic,
             hfov=args.flow_hfov,
             fps=args.flow_fps,
-            display=not args.no_flow_display,
+            display=args.display,
             report_every=args.flow_report_every,
             sensor_id=args.flow_sensor_id,
+            log=args.log_optical_flow,
         )
         print("flow start")
         flow_forwarder.start()
