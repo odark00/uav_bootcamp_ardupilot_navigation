@@ -31,4 +31,9 @@ RUN bash -c "source /opt/ros/humble/setup.bash && \
                 ardupilot_gz_application \
                 ardupilot_sitl_models"
 
+# Live ground-truth plots (velocity + yaw). Rendered with matplotlib's headless
+# Agg backend (already in the base image) and served over the stdlib http.server
+# -- no extra dependencies. Auto-started by the docker-compose `command`.
+# Kept below the colcon build so it doesn't invalidate that expensive layer.
+COPY ./plot_ground_truth.py /root/ardu_ws/plot_ground_truth.py
 RUN echo "source /root/ardu_ws/install/setup.bash" >> /root/.bashrc

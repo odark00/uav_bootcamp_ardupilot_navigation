@@ -8,7 +8,10 @@ services:
       bash -c "
         source install/setup.bash &&
         sleep 10 &&
+        ( python3 /root/ardu_ws/plot_ground_truth.py > /tmp/gt_plot.log 2>&1 & ) &&
         ros2 launch ardupilot_gz_bringup iris_runway.launch.py"
+    ports:
+      - "8088:8088"   # Ground-truth velocity+yaw plots -> http://localhost:8088/
     environment:
       - DISPLAY=${DISPLAY}
     network_mode: host
