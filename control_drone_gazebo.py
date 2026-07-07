@@ -644,7 +644,7 @@ def parse_args() -> argparse.Namespace:
         description="Run guided mission with optional optical-flow display (no SITL forwarding)."
     )
     parser.add_argument("--altitude", type=float, default=3.0, help="Mission takeoff altitude in meters")
-    parser.add_argument("--speed", type=float, default=10.0, help="Forward flight speed in m/s (body-frame vx, along heading)")
+    parser.add_argument("--speed", type=float, default=3.0, help="Forward flight speed in m/s (body-frame vx, along heading)")
     parser.add_argument(
         "--guided_nogps",
         action="store_true",
