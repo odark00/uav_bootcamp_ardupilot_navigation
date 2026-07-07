@@ -7,32 +7,11 @@ Terminal 1
 ./start.sh
 ```
 
-
 Terminal 2
-
-```bash
-./enter.sh
-ros2 launch ardupilot_gz_bringup iris_runway.launch.py
-```
-
-
-Terminal 3
-
-```bash
-./enter.sh
-mavproxy.py --console
-param load dsgps.param
-```
-
-Exit from Terminal 3, and kill and run again "ros2 launch ardupilot_gz_bringup iris_runway.launch.py"
-
-Terminal 4
 
 ```bash
 ./run_control_drone.sh
 ```
-
-
 
 ### ----
 

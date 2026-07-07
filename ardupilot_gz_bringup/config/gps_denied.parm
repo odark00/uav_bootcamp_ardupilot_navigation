@@ -7,20 +7,47 @@
 # will NOT arm in GPS-dependent modes (Loiter, Auto, Guided, RTL).
 
 # --- Disable the GPS driver so ArduPilot has no GPS backend ---
-# GPS_TYPE is the pre-4.5 name, GPS1_TYPE the 4.5+ name. Setting both is safe:
-# the firmware ignores whichever parameter it does not define.
 GPS_TYPE         0
 GPS1_TYPE        0
+EK3_GPS_TYPE,3
+SIM_GPS_TYPE,0
+EK3_GPS_CHECK,0
+AHRS_GPS_USE,0
+AHRS_GPS_GAIN,0.0
+AHRS_GPS_MINSATS,0
 
 # --- Disable pre-arm/arming checks ---
 # GPS-denied attitude flying (GUIDED_NOGPS) has no position estimate, so the
 # stock checks would block arming. 0 = all checks off.
 ARMING_CHECK     0
 
-# --- Remove GPS from the EKF3 source set (no replacement source) ---
-AHRS_EKF_TYPE    3
-EK3_SRC1_POSXY   0    # horizontal position: none
-EK3_SRC1_VELXY   0    # horizontal velocity: none
-EK3_SRC1_POSZ    1    # vertical position: barometer
-EK3_SRC1_VELZ    0    # vertical velocity: none
-EK3_SRC1_YAW     1    # yaw: compass
+# --- EKF sources (flow-only horizontal nav, baro/compass otherwise) ---
+EK2_ENABLE,0
+EK3_ENABLE,1
+AHRS_EKF_TYPE,3
+AHRS_OPTIONS,24
+EK3_SRC1_POSXY   5
+EK3_SRC1_VELXY   5
+EK3_SRC1_POSZ    1
+#EK3_SRC1_VELZ    0
+EK3_SRC1_YAW     1
+
+# --- Optical flow ---
+SIM_FLOW_ENABLE,1
+SIM_FLOW_DELAY,1
+FLOW_TYPE,5
+
+# --- Misc safety ---
+GPS_AUTO_CONFIG,0
+GPS_AUTO_SWITCH,0
+GPS_BLEND_MASK,0
+GPS_DRV_OPTIONS,0
+GPS_HDOP_GOOD,999
+GPS_MIN_ELEV,-100
+GPS_NAVFILTER,0
+GPS_PRIMARY,0
+GPS_RAW_DATA,0
+GPS_SAVE_CFG,0
+GPS_SBAS_MODE,0
+GPS_SBP_LOGMASK,0
+SIM_GPS_LOG_NUM,0

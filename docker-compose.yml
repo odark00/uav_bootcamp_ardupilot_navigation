@@ -7,11 +7,8 @@ services:
     command:
       bash -c "
         source install/setup.bash &&
-        tail -f /dev/null"
-        # sleep 10 &&
-        # ros2 launch ardupilot_gz_bringup iris_runway.launch.py" #&
-        #sleep 100 && python control_drone_gazebo.py
-      #"
+        sleep 10 &&
+        ros2 launch ardupilot_gz_bringup iris_runway.launch.py"
     environment:
       - DISPLAY=${DISPLAY}
     network_mode: host
